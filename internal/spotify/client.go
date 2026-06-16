@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/aaronpollock/liner-notes-server/internal/httpx"
 )
@@ -40,6 +42,7 @@ type Client struct {
 	tokens     TokenProvider
 	baseURL    string
 	httpClient *http.Client
+	logger     *slog.Logger
 }
 
 // ClientOption configures a Client.
@@ -55,12 +58,19 @@ func WithHTTPClient(h *http.Client) ClientOption {
 	return func(c *Client) { c.httpClient = h }
 }
 
+// WithLogger sets the logger used to record outbound search requests. Without
+// it, the client discards request logs.
+func WithLogger(l *slog.Logger) ClientOption {
+	return func(c *Client) { c.logger = l }
+}
+
 // NewClient builds a Spotify search client backed by the given token provider.
 func NewClient(tokens TokenProvider, opts ...ClientOption) *Client {
 	c := &Client{
 		tokens:     tokens,
 		baseURL:    DefaultAPIBaseURL,
 		httpClient: http.DefaultClient,
+		logger:     slog.New(slog.DiscardHandler),
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -116,13 +126,25 @@ func (c *Client) search(ctx context.Context, query string) ([]Track, error) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/json")
 
+	start := time.Now()
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		c.logger.Error("spotify search",
+			"query", query,
+			"dur", time.Since(start).String(),
+			"err", err.Error(),
+		)
 		return nil, fmt.Errorf("spotify: search request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if err := httpx.CheckResponse(serviceName, resp); err != nil {
+		c.logger.Error("spotify search",
+			"query", query,
+			"status", resp.StatusCode,
+			"dur", time.Since(start).String(),
+			"err", err.Error(),
+		)
 		return nil, err
 	}
 
@@ -130,6 +152,13 @@ func (c *Client) search(ctx context.Context, query string) ([]Track, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&sr); err != nil {
 		return nil, fmt.Errorf("spotify: decode search response: %w", err)
 	}
+
+	c.logger.Info("spotify search",
+		"query", query,
+		"status", resp.StatusCode,
+		"results", len(sr.Tracks.Items),
+		"dur", time.Since(start).String(),
+	)
 
 	tracks := make([]Track, 0, len(sr.Tracks.Items))
 	for _, it := range sr.Tracks.Items {

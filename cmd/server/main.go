@@ -44,7 +44,10 @@ func run(logger *slog.Logger) error {
 		cfg.SpotifyClientID, cfg.SpotifyClientSecret,
 		spotifyauth.WithHTTPClient(httpClient),
 	)
-	search := spotify.NewClient(tokens, spotify.WithHTTPClient(httpClient))
+	search := spotify.NewClient(tokens,
+		spotify.WithHTTPClient(httpClient),
+		spotify.WithLogger(logger),
+	)
 	features := reccobeats.NewClient(
 		reccobeats.WithHTTPClient(httpClient),
 		reccobeats.WithLogger(logger),

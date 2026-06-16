@@ -1,8 +1,11 @@
 package spotify
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -114,6 +117,102 @@ func TestClient_EmptyResults(t *testing.T) {
 	if len(tracks) != 0 {
 		t.Errorf("got %d tracks, want 0", len(tracks))
 	}
+}
+
+func TestClient_LogsSearch(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(searchResponseJSON))
+	}))
+	t.Cleanup(srv.Close)
+
+	buf := &bytes.Buffer{}
+	logger := slog.New(slog.NewJSONHandler(buf, nil))
+	c := NewClient(staticToken("t"), WithBaseURL(srv.URL), WithHTTPClient(srv.Client()), WithLogger(logger))
+	if _, err := c.SearchByISRC(context.Background(), "USSUB0500001"); err != nil {
+		t.Fatalf("SearchByISRC error: %v", err)
+	}
+
+	rec := decodeLog(t, buf)
+	if rec["query"] != "isrc:USSUB0500001" {
+		t.Errorf("query = %v, want isrc:USSUB0500001", rec["query"])
+	}
+	if rec["status"] != float64(http.StatusOK) {
+		t.Errorf("status = %v, want 200", rec["status"])
+	}
+	if rec["results"] != float64(1) {
+		t.Errorf("results = %v, want 1", rec["results"])
+	}
+	if _, ok := rec["dur"]; !ok {
+		t.Error("dur missing from log record")
+	}
+}
+
+func TestClient_LogsTransportError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+	srv.Close() // closed server → transport error, no response/status
+
+	buf := &bytes.Buffer{}
+	logger := slog.New(slog.NewJSONHandler(buf, nil))
+	c := NewClient(staticToken("t"), WithBaseURL(srv.URL), WithHTTPClient(srv.Client()), WithLogger(logger))
+	if _, err := c.SearchByISRC(context.Background(), "x"); err == nil {
+		t.Fatal("expected a transport error")
+	}
+
+	rec := decodeLog(t, buf)
+	if rec["level"] != "ERROR" {
+		t.Errorf("level = %v, want ERROR", rec["level"])
+	}
+	if rec["query"] != "isrc:x" {
+		t.Errorf("query = %v, want isrc:x", rec["query"])
+	}
+	if _, ok := rec["err"]; !ok {
+		t.Error("err missing from log record")
+	}
+}
+
+func TestClient_LogsUpstreamError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "boom", http.StatusBadGateway)
+	}))
+	t.Cleanup(srv.Close)
+
+	buf := &bytes.Buffer{}
+	logger := slog.New(slog.NewJSONHandler(buf, nil))
+	c := NewClient(staticToken("t"), WithBaseURL(srv.URL), WithHTTPClient(srv.Client()), WithLogger(logger))
+	if _, err := c.SearchByISRC(context.Background(), "x"); err == nil {
+		t.Fatal("expected an upstream error")
+	}
+
+	rec := decodeLog(t, buf)
+	if rec["level"] != "ERROR" {
+		t.Errorf("level = %v, want ERROR", rec["level"])
+	}
+	if rec["status"] != float64(http.StatusBadGateway) {
+		t.Errorf("status = %v, want 502", rec["status"])
+	}
+}
+
+func TestClient_NoLoggerByDefault(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(searchResponseJSON))
+	}))
+	t.Cleanup(srv.Close)
+
+	// No WithLogger: must not panic and must default to discarding logs.
+	c := NewClient(staticToken("t"), WithBaseURL(srv.URL), WithHTTPClient(srv.Client()))
+	if _, err := c.SearchByISRC(context.Background(), "x"); err != nil {
+		t.Fatalf("SearchByISRC error: %v", err)
+	}
+}
+
+// decodeLog parses the single JSON log record written to buf.
+func decodeLog(t *testing.T, buf *bytes.Buffer) map[string]any {
+	t.Helper()
+	var rec map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &rec); err != nil {
+		t.Fatalf("decode log line %q: %v", buf.String(), err)
+	}
+	return rec
 }
 
 func TestClient_PropagatesTokenError(t *testing.T) {
