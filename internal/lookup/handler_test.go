@@ -93,6 +93,38 @@ func TestHandler_DegradedFeaturesUnavailable(t *testing.T) {
 	}
 }
 
+func TestHandler_TitleArtistOnly(t *testing.T) {
+	looker := fakeLooker{fn: func(req Request) (Result, error) {
+		if req.ISRC != "" {
+			t.Errorf("ISRC = %q, want empty", req.ISRC)
+		}
+		if req.Title != "Such Great Heights" || req.Artist != "The Postal Service" {
+			t.Errorf("title/artist = %q/%q, not forwarded", req.Title, req.Artist)
+		}
+		return Result{
+			Title:          "Such Great Heights",
+			Artist:         "The Postal Service",
+			SpotifyID:      "title-id",
+			Features:       &reccobeats.AudioFeatures{Tempo: 90},
+			FeaturesStatus: StatusAvailable,
+		}, nil
+	}}
+
+	rec := doRequest(t, NewHandler(looker), http.MethodPost,
+		`{"title":"Such Great Heights","artist":"The Postal Service"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body)
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["spotify_id"] != "title-id" {
+		t.Errorf("spotify_id = %v, want title-id", resp["spotify_id"])
+	}
+}
+
 func TestHandler_EmptyISRC(t *testing.T) {
 	looker := fakeLooker{fn: func(req Request) (Result, error) {
 		return Result{}, ErrInvalidRequest
