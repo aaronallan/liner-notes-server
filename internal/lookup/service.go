@@ -45,6 +45,7 @@ type Result struct {
 	Title          string
 	Artist         string
 	SpotifyID      string
+	AlbumArtURL    string
 	Features       *reccobeats.AudioFeatures
 	FeaturesStatus FeaturesStatus
 }
@@ -115,12 +116,15 @@ func (s *Service) Lookup(ctx context.Context, req Request) (Result, error) {
 		FeaturesStatus: StatusUnavailable,
 	}
 
-	spotifyID := s.resolveSpotifyID(ctx, req)
+	spotifyID, albumArt := s.resolveSpotifyID(ctx, req)
 	if spotifyID == "" {
 		// Could not resolve the track at all; return the scan metadata as-is.
 		return result, nil
 	}
 	result.SpotifyID = spotifyID
+	// Album art is Spotify content: forwarded for immediate display, never
+	// stored. It is only available on a fresh search, not a cache hit.
+	result.AlbumArtURL = albumArt
 
 	feats, err := retry.Do(ctx, s.retry, func(ctx context.Context) (*reccobeats.AudioFeatures, error) {
 		return s.features.AudioFeatures(ctx, spotifyID)
@@ -134,14 +138,16 @@ func (s *Service) Lookup(ctx context.Context, req Request) (Result, error) {
 	return result, nil
 }
 
-// resolveSpotifyID returns the Spotify track ID for the request: the cache
-// (keyed on normalized title+artist) first, then — if an ISRC is present — an
-// ISRC search for accuracy, then a title/artist search. It returns "" when the
-// track cannot be resolved.
-func (s *Service) resolveSpotifyID(ctx context.Context, req Request) string {
+// resolveSpotifyID returns the Spotify track ID for the request (plus the album
+// art URL when it comes from a fresh search): the cache (keyed on normalized
+// title+artist) first, then — if an ISRC is present — an ISRC search for
+// accuracy, then a title/artist search. It returns "" for the ID when the track
+// cannot be resolved. A cache hit yields no album art, since only the identifier
+// is cached.
+func (s *Service) resolveSpotifyID(ctx context.Context, req Request) (id, albumArt string) {
 	key := normalize.Key(req.Title, req.Artist)
-	if id, ok := s.cache.Get(key); ok {
-		return id
+	if cached, ok := s.cache.Get(key); ok {
+		return cached, ""
 	}
 
 	// Opportunistic: an ISRC, when present, pins the exact recording.
@@ -149,7 +155,7 @@ func (s *Service) resolveSpotifyID(ctx context.Context, req Request) string {
 		if tracks := s.searchTracks(ctx, func(ctx context.Context) ([]spotify.Track, error) {
 			return s.search.SearchByISRC(ctx, req.ISRC)
 		}); len(tracks) > 0 {
-			return s.acceptTrack(key, tracks[0])
+			return s.acceptTrack(key, tracks[0]), tracks[0].AlbumArtURL
 		}
 	}
 
@@ -157,10 +163,10 @@ func (s *Service) resolveSpotifyID(ctx context.Context, req Request) string {
 	if tracks := s.searchTracks(ctx, func(ctx context.Context) ([]spotify.Track, error) {
 		return s.search.SearchByTitleArtist(ctx, req.Title, req.Artist)
 	}); len(tracks) > 0 {
-		return s.acceptTrack(key, tracks[0])
+		return s.acceptTrack(key, tracks[0]), tracks[0].AlbumArtURL
 	}
 
-	return ""
+	return "", ""
 }
 
 // searchTracks runs a search with retry, swallowing errors (best-effort): an

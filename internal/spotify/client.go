@@ -29,10 +29,11 @@ type TokenProvider interface {
 // Track is a parsed Spotify search result. Only the fields the backend needs are
 // surfaced; the Spotify track ID is the value the rest of the pipeline depends on.
 type Track struct {
-	ID      string
-	Name    string
-	Artists []string
-	ISRC    string
+	ID          string
+	Name        string
+	Artists     []string
+	ISRC        string
+	AlbumArtURL string // largest album cover image; empty when none
 }
 
 // Client is a typed wrapper around the Spotify Web API Search endpoint. It
@@ -102,8 +103,31 @@ type searchResponse struct {
 			ExternalIDs struct {
 				ISRC string `json:"isrc"`
 			} `json:"external_ids"`
+			Album struct {
+				Images []image `json:"images"`
+			} `json:"album"`
 		} `json:"items"`
 	} `json:"tracks"`
+}
+
+// image is one entry in a Spotify album's images array.
+type image struct {
+	URL    string `json:"url"`
+	Width  int    `json:"width"`
+	Height int    `json:"height"`
+}
+
+// largestImageURL returns the URL of the widest image, or "" when there are none.
+func largestImageURL(images []image) string {
+	best := -1
+	url := ""
+	for _, img := range images {
+		if img.Width > best {
+			best = img.Width
+			url = img.URL
+		}
+	}
+	return url
 }
 
 func (c *Client) search(ctx context.Context, query string) ([]Track, error) {
@@ -167,10 +191,11 @@ func (c *Client) search(ctx context.Context, query string) ([]Track, error) {
 			artists = append(artists, a.Name)
 		}
 		tracks = append(tracks, Track{
-			ID:      it.ID,
-			Name:    it.Name,
-			Artists: artists,
-			ISRC:    it.ExternalIDs.ISRC,
+			ID:          it.ID,
+			Name:        it.Name,
+			Artists:     artists,
+			ISRC:        it.ExternalIDs.ISRC,
+			AlbumArtURL: largestImageURL(it.Album.Images),
 		})
 	}
 	return tracks, nil
