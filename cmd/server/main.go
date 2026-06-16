@@ -16,6 +16,7 @@ import (
 	"github.com/aaronpollock/liner-notes-server/internal/cache"
 	"github.com/aaronpollock/liner-notes-server/internal/config"
 	"github.com/aaronpollock/liner-notes-server/internal/lookup"
+	"github.com/aaronpollock/liner-notes-server/internal/middleware"
 	"github.com/aaronpollock/liner-notes-server/internal/reccobeats"
 	"github.com/aaronpollock/liner-notes-server/internal/spotify"
 	"github.com/aaronpollock/liner-notes-server/internal/spotifyauth"
@@ -44,7 +45,10 @@ func run(logger *slog.Logger) error {
 		spotifyauth.WithHTTPClient(httpClient),
 	)
 	search := spotify.NewClient(tokens, spotify.WithHTTPClient(httpClient))
-	features := reccobeats.NewClient(reccobeats.WithHTTPClient(httpClient))
+	features := reccobeats.NewClient(
+		reccobeats.WithHTTPClient(httpClient),
+		reccobeats.WithLogger(logger),
+	)
 	idCache := cache.NewMemory[string, string]()
 
 	svc := lookup.NewService(search, features, idCache)
@@ -58,7 +62,7 @@ func run(logger *slog.Logger) error {
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           mux,
+		Handler:           middleware.Logging(logger, mux),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

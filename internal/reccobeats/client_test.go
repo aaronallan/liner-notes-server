@@ -1,8 +1,11 @@
 package reccobeats
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -70,6 +73,73 @@ func TestClient_EscapesSpotifyID(t *testing.T) {
 	}
 	if gotPath != "/v1/track/weird%2Fid%20space/audio-features" {
 		t.Errorf("path = %q, want id path-escaped", gotPath)
+	}
+}
+
+func TestClient_LogsRequest(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(featuresResponse))
+	}))
+	t.Cleanup(srv.Close)
+
+	buf := &bytes.Buffer{}
+	logger := slog.New(slog.NewJSONHandler(buf, nil))
+	c := NewClient(WithBaseURL(srv.URL), WithHTTPClient(srv.Client()), WithLogger(logger))
+	if _, err := c.AudioFeatures(context.Background(), "track-abc"); err != nil {
+		t.Fatalf("AudioFeatures error: %v", err)
+	}
+
+	var rec map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &rec); err != nil {
+		t.Fatalf("decode log line %q: %v", buf.String(), err)
+	}
+	if rec["spotify_id"] != "track-abc" {
+		t.Errorf("spotify_id = %v, want track-abc", rec["spotify_id"])
+	}
+	if rec["status"] != float64(http.StatusOK) {
+		t.Errorf("status = %v, want 200", rec["status"])
+	}
+	if _, ok := rec["dur"]; !ok {
+		t.Error("dur missing from log record")
+	}
+}
+
+func TestClient_LogsTransportError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+	srv.Close() // closed server → transport error, no response/status
+
+	buf := &bytes.Buffer{}
+	logger := slog.New(slog.NewJSONHandler(buf, nil))
+	c := NewClient(WithBaseURL(srv.URL), WithHTTPClient(srv.Client()), WithLogger(logger))
+	if _, err := c.AudioFeatures(context.Background(), "track-abc"); err == nil {
+		t.Fatal("expected a transport error")
+	}
+
+	var rec map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &rec); err != nil {
+		t.Fatalf("decode log line %q: %v", buf.String(), err)
+	}
+	if rec["level"] != "ERROR" {
+		t.Errorf("level = %v, want ERROR", rec["level"])
+	}
+	if rec["spotify_id"] != "track-abc" {
+		t.Errorf("spotify_id = %v, want track-abc", rec["spotify_id"])
+	}
+	if _, ok := rec["err"]; !ok {
+		t.Error("err missing from log record")
+	}
+}
+
+func TestClient_NoLoggerByDefault(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(featuresResponse))
+	}))
+	t.Cleanup(srv.Close)
+
+	// No WithLogger: must not panic and must default to discarding logs.
+	c := NewClient(WithBaseURL(srv.URL), WithHTTPClient(srv.Client()))
+	if _, err := c.AudioFeatures(context.Background(), "track-abc"); err != nil {
+		t.Fatalf("AudioFeatures error: %v", err)
 	}
 }
 
