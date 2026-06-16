@@ -1,7 +1,8 @@
-// Package lookup implements the Liner Notes pipeline: it resolves an ISRC (with a
-// title/artist fallback) to a Spotify track ID, fetches the track's audio
-// features, and degrades gracefully when the upstreams — which have no SLA —
-// misbehave, so a scan never hard-fails on Spotify/ReccoBeats trouble.
+// Package lookup implements the Liner Notes pipeline: it resolves a track from
+// its title/artist (with an optional ISRC to sharpen the match) to a Spotify
+// track ID, fetches the track's audio features, and degrades gracefully when the
+// upstreams — which have no SLA — misbehave, so a scan never hard-fails on
+// Spotify/ReccoBeats trouble.
 package lookup
 
 import (
@@ -9,14 +10,15 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/aaronpollock/liner-notes-server/internal/normalize"
 	"github.com/aaronpollock/liner-notes-server/internal/reccobeats"
 	"github.com/aaronpollock/liner-notes-server/internal/retry"
 	"github.com/aaronpollock/liner-notes-server/internal/spotify"
 )
 
-// ErrInvalidRequest indicates the caller supplied neither an ISRC nor a usable
-// title+artist pair to resolve the track from.
-var ErrInvalidRequest = errors.New("lookup: request requires an ISRC or title and artist")
+// ErrInvalidRequest indicates the caller supplied no usable title+artist pair to
+// resolve the track from.
+var ErrInvalidRequest = errors.New("lookup: request requires a title and artist")
 
 // FeaturesStatus reports whether audio features were resolved for a scan.
 type FeaturesStatus string
@@ -27,7 +29,9 @@ const (
 )
 
 // Request is a lookup request, mirroring what the mobile client knows after a
-// ShazamKit match: an ISRC plus optional human-readable metadata.
+// ShazamKit match: a title and artist, plus an optional ISRC. In practice
+// ShazamKit rarely supplies an ISRC, so title+artist is the primary input; an
+// ISRC, when present, is used opportunistically to pin the exact recording.
 type Request struct {
 	ISRC   string
 	Title  string
@@ -58,10 +62,12 @@ type FeaturesFetcher interface {
 	AudioFeatures(ctx context.Context, spotifyID string) (*reccobeats.AudioFeatures, error)
 }
 
-// IDCache caches the immutable ISRC → Spotify-ID mapping. cache.Memory satisfies it.
+// IDCache caches the (normalized title+artist) → Spotify-ID mapping. The key is
+// an identifier mapping derived from the caller's own match metadata, so it is
+// safe to cache. cache.Memory satisfies it.
 type IDCache interface {
-	Get(isrc string) (string, bool)
-	Set(isrc, spotifyID string)
+	Get(key string) (string, bool)
+	Set(key, spotifyID string)
 }
 
 // Service ties the Spotify and ReccoBeats clients into the full pipeline.
@@ -97,10 +103,8 @@ func NewService(search Searcher, features FeaturesFetcher, cache IDCache, opts .
 // Lookup runs the pipeline for one request. It only returns an error for invalid
 // input; upstream failures are absorbed into a degraded (but successful) result.
 func (s *Service) Lookup(ctx context.Context, req Request) (Result, error) {
-	// A request is resolvable from an ISRC, or — when ShazamKit returned no
-	// ISRC — from a title+artist pair. Reject only when we have neither.
-	hasTitleArtist := strings.TrimSpace(req.Title) != "" && strings.TrimSpace(req.Artist) != ""
-	if req.ISRC == "" && !hasTitleArtist {
+	// Title+artist is the contract; an ISRC alone is not enough to key on.
+	if strings.TrimSpace(req.Title) == "" || strings.TrimSpace(req.Artist) == "" {
 		return Result{}, ErrInvalidRequest
 	}
 
@@ -111,9 +115,9 @@ func (s *Service) Lookup(ctx context.Context, req Request) (Result, error) {
 		FeaturesStatus: StatusUnavailable,
 	}
 
-	spotifyID := s.resolveSpotifyID(ctx, req, &result)
+	spotifyID := s.resolveSpotifyID(ctx, req)
 	if spotifyID == "" {
-		// Could not resolve the track at all; return Shazam metadata as-is.
+		// Could not resolve the track at all; return the scan metadata as-is.
 		return result, nil
 	}
 	result.SpotifyID = spotifyID
@@ -130,32 +134,30 @@ func (s *Service) Lookup(ctx context.Context, req Request) (Result, error) {
 	return result, nil
 }
 
-// resolveSpotifyID returns the Spotify track ID for the request, consulting the
-// cache first, then an ISRC search, then a title/artist fallback. It returns ""
-// when the track cannot be resolved. Resolved metadata enriches result.
-func (s *Service) resolveSpotifyID(ctx context.Context, req Request, result *Result) string {
-	// With no ISRC the cache (keyed on ISRC) and the ISRC search are both
-	// meaningless, so go straight to the title+artist fallback below.
-	if req.ISRC != "" {
-		if id, ok := s.cache.Get(req.ISRC); ok {
-			return id
-		}
+// resolveSpotifyID returns the Spotify track ID for the request: the cache
+// (keyed on normalized title+artist) first, then — if an ISRC is present — an
+// ISRC search for accuracy, then a title/artist search. It returns "" when the
+// track cannot be resolved.
+func (s *Service) resolveSpotifyID(ctx context.Context, req Request) string {
+	key := normalize.Key(req.Title, req.Artist)
+	if id, ok := s.cache.Get(key); ok {
+		return id
+	}
 
-		// Primary: resolve by ISRC, which identifies the exact recording.
+	// Opportunistic: an ISRC, when present, pins the exact recording.
+	if req.ISRC != "" {
 		if tracks := s.searchTracks(ctx, func(ctx context.Context) ([]spotify.Track, error) {
 			return s.search.SearchByISRC(ctx, req.ISRC)
 		}); len(tracks) > 0 {
-			return s.acceptTrack(req.ISRC, tracks[0], result)
+			return s.acceptTrack(key, tracks[0])
 		}
 	}
 
-	// Fallback: free-text title + artist from the Shazam match.
-	if req.Title != "" && req.Artist != "" {
-		if tracks := s.searchTracks(ctx, func(ctx context.Context) ([]spotify.Track, error) {
-			return s.search.SearchByTitleArtist(ctx, req.Title, req.Artist)
-		}); len(tracks) > 0 {
-			return s.acceptTrack(req.ISRC, tracks[0], result)
-		}
+	// Primary: free-text title + artist from the match.
+	if tracks := s.searchTracks(ctx, func(ctx context.Context) ([]spotify.Track, error) {
+		return s.search.SearchByTitleArtist(ctx, req.Title, req.Artist)
+	}); len(tracks) > 0 {
+		return s.acceptTrack(key, tracks[0])
 	}
 
 	return ""
@@ -171,19 +173,9 @@ func (s *Service) searchTracks(ctx context.Context, fn func(context.Context) ([]
 	return tracks
 }
 
-// acceptTrack records the ISRC → ID mapping, enriches missing metadata from the
-// resolved track, and returns the track ID.
-func (s *Service) acceptTrack(isrc string, t spotify.Track, result *Result) string {
-	// Only cache a real ISRC → ID mapping; an empty key would collide across
-	// unrelated title/artist requests.
-	if isrc != "" {
-		s.cache.Set(isrc, t.ID)
-	}
-	if result.Title == "" {
-		result.Title = t.Name
-	}
-	if result.Artist == "" && len(t.Artists) > 0 {
-		result.Artist = strings.Join(t.Artists, ", ")
-	}
+// acceptTrack records the (normalized title+artist) → ID mapping and returns the
+// track ID. It never stores Spotify-sourced metadata — only the identifier.
+func (s *Service) acceptTrack(key string, t spotify.Track) string {
+	s.cache.Set(key, t.ID)
 	return t.ID
 }
