@@ -1,6 +1,6 @@
-// Package spotify provides authentication and typed clients for the Spotify Web
-// API used by the Liner Notes backend.
-package spotify
+// Package spotifyauth implements the Spotify OAuth2 Client Credentials flow,
+// providing cached bearer tokens for the Spotify Web API clients.
+package spotifyauth
 
 import (
 	"context"
@@ -24,13 +24,7 @@ const DefaultTokenURL = "https://accounts.spotify.com/api/token"
 const defaultEarlyRefresh = 60 * time.Second
 
 // ErrMissingCredentials is returned when the client ID or secret is empty.
-var ErrMissingCredentials = errors.New("spotify: missing client credentials")
-
-// TokenProvider supplies a valid Spotify bearer access token, refreshing it as
-// needed. Clients depend on this interface rather than a concrete type.
-type TokenProvider interface {
-	Token(ctx context.Context) (string, error)
-}
+var ErrMissingCredentials = errors.New("spotifyauth: missing client credentials")
 
 // ClientCredentials implements the Spotify OAuth2 Client Credentials flow.
 //
@@ -129,31 +123,31 @@ func (c *ClientCredentials) fetchToken(ctx context.Context) (cachedToken, error)
 	form := url.Values{"grant_type": {"client_credentials"}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.tokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
-		return cachedToken{}, fmt.Errorf("spotify: build token request: %w", err)
+		return cachedToken{}, fmt.Errorf("spotifyauth: build token request: %w", err)
 	}
 	req.SetBasicAuth(c.clientID, c.clientSecret)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return cachedToken{}, fmt.Errorf("spotify: token request: %w", err)
+		return cachedToken{}, fmt.Errorf("spotifyauth: token request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return cachedToken{}, fmt.Errorf("spotify: read token response: %w", err)
+		return cachedToken{}, fmt.Errorf("spotifyauth: read token response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return cachedToken{}, fmt.Errorf("spotify: token endpoint returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return cachedToken{}, fmt.Errorf("spotifyauth: token endpoint returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	var tr tokenResponse
 	if err := json.Unmarshal(body, &tr); err != nil {
-		return cachedToken{}, fmt.Errorf("spotify: decode token response: %w", err)
+		return cachedToken{}, fmt.Errorf("spotifyauth: decode token response: %w", err)
 	}
 	if tr.AccessToken == "" {
-		return cachedToken{}, errors.New("spotify: token endpoint returned empty access_token")
+		return cachedToken{}, errors.New("spotifyauth: token endpoint returned empty access_token")
 	}
 
 	lifetime := time.Duration(tr.ExpiresIn) * time.Second
