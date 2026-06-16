@@ -9,6 +9,7 @@ package reccobeats
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -24,6 +25,12 @@ const DefaultBaseURL = "https://api.reccobeats.com"
 
 // serviceName labels errors originating from ReccoBeats.
 const serviceName = "reccobeats"
+
+// ErrNotFound is returned when ReccoBeats has no audio features for the given
+// Spotify ID. The endpoint signals this with a 200 and an empty content array,
+// not a 404, so callers should test for this with errors.Is rather than a
+// status code.
+var ErrNotFound = errors.New("reccobeats: no audio features for track")
 
 // AudioFeatures holds a track's musical characteristics. The field set mirrors
 // Spotify's classic audio-features schema, which ReccoBeats reproduces.
@@ -80,9 +87,19 @@ func NewClient(opts ...Option) *Client {
 	return c
 }
 
-// AudioFeatures fetches the audio features for a Spotify track ID.
+// audioFeaturesResponse wraps the ReccoBeats /v1/audio-features payload, which
+// returns a content array (the endpoint is batch-oriented even for one ID).
+type audioFeaturesResponse struct {
+	Content []AudioFeatures `json:"content"`
+}
+
+// AudioFeatures fetches the audio features for a Spotify track ID. It calls the
+// batch /v1/audio-features endpoint, which accepts Spotify IDs directly — unlike
+// the single-track /track/{id} path, which requires a ReccoBeats UUID. When the
+// track is unknown to ReccoBeats the endpoint returns 200 with empty content,
+// which is surfaced as ErrNotFound.
 func (c *Client) AudioFeatures(ctx context.Context, spotifyID string) (*AudioFeatures, error) {
-	endpoint := fmt.Sprintf("%s/v1/track/%s/audio-features", c.baseURL, url.PathEscape(spotifyID))
+	endpoint := c.baseURL + "/v1/audio-features?ids=" + url.QueryEscape(spotifyID)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -102,19 +119,30 @@ func (c *Client) AudioFeatures(ctx context.Context, spotifyID string) (*AudioFea
 	}
 	defer resp.Body.Close()
 
-	c.logger.Info("reccobeats request",
-		"spotify_id", spotifyID,
-		"status", resp.StatusCode,
-		"dur", time.Since(start).String(),
-	)
-
 	if err := httpx.CheckResponse(serviceName, resp); err != nil {
+		c.logger.Error("reccobeats request",
+			"spotify_id", spotifyID,
+			"status", resp.StatusCode,
+			"dur", time.Since(start).String(),
+			"err", err.Error(),
+		)
 		return nil, err
 	}
 
-	var feats AudioFeatures
-	if err := json.NewDecoder(resp.Body).Decode(&feats); err != nil {
+	var body audioFeaturesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		return nil, fmt.Errorf("reccobeats: decode response: %w", err)
 	}
-	return &feats, nil
+
+	found := len(body.Content) > 0
+	c.logger.Info("reccobeats request",
+		"spotify_id", spotifyID,
+		"status", resp.StatusCode,
+		"found", found,
+		"dur", time.Since(start).String(),
+	)
+	if !found {
+		return nil, ErrNotFound
+	}
+	return &body.Content[0], nil
 }

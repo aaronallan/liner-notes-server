@@ -13,24 +13,37 @@ import (
 	"github.com/aaronpollock/liner-notes-server/internal/httpx"
 )
 
+// featuresResponse mirrors the real ReccoBeats /v1/audio-features payload: a
+// "content" array of feature objects, each carrying the ReccoBeats id, the
+// Spotify href, and the audio-feature fields.
 const featuresResponse = `{
-  "acousticness": 0.012,
-  "danceability": 0.735,
-  "energy": 0.578,
-  "instrumentalness": 0.0001,
-  "liveness": 0.104,
-  "loudness": -8.3,
-  "speechiness": 0.041,
-  "tempo": 119.8,
-  "valence": 0.624,
-  "key": 5,
-  "mode": 1
+  "content": [
+    {
+      "id": "505e3d6f-82fb-4478-b68a-94ad1a0c9ad8",
+      "href": "https://open.spotify.com/track/track-abc",
+      "isrc": "USQX92504223",
+      "acousticness": 0.012,
+      "danceability": 0.735,
+      "energy": 0.578,
+      "instrumentalness": 0.0001,
+      "liveness": 0.104,
+      "loudness": -8.3,
+      "speechiness": 0.041,
+      "tempo": 119.8,
+      "valence": 0.624,
+      "key": 5,
+      "mode": 1
+    }
+  ]
 }`
 
+const emptyResponse = `{"content":[]}`
+
 func TestClient_AudioFeatures(t *testing.T) {
-	var gotPath string
+	var gotPath, gotIDs string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
+		gotIDs = r.URL.Query().Get("ids")
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(featuresResponse))
 	}))
@@ -42,8 +55,13 @@ func TestClient_AudioFeatures(t *testing.T) {
 		t.Fatalf("AudioFeatures error: %v", err)
 	}
 
-	if gotPath != "/v1/track/track-abc/audio-features" {
-		t.Errorf("path = %q, want /v1/track/track-abc/audio-features", gotPath)
+	// The single-track path requires a ReccoBeats UUID; the batch
+	// /v1/audio-features endpoint is the one that accepts Spotify IDs.
+	if gotPath != "/v1/audio-features" {
+		t.Errorf("path = %q, want /v1/audio-features", gotPath)
+	}
+	if gotIDs != "track-abc" {
+		t.Errorf("ids = %q, want track-abc", gotIDs)
 	}
 	if feats.Danceability != 0.735 {
 		t.Errorf("Danceability = %v, want 0.735", feats.Danceability)
@@ -59,10 +77,27 @@ func TestClient_AudioFeatures(t *testing.T) {
 	}
 }
 
-func TestClient_EscapesSpotifyID(t *testing.T) {
-	var gotPath string
+func TestClient_EmptyContentNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// ReccoBeats returns 200 with an empty content array for unknown IDs.
+		_, _ = w.Write([]byte(emptyResponse))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewClient(WithBaseURL(srv.URL), WithHTTPClient(srv.Client()))
+	_, err := c.AudioFeatures(context.Background(), "not-in-db")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("error = %v, want ErrNotFound", err)
+	}
+	if httpx.IsRetryable(err) {
+		t.Error("a missing track should not be retryable")
+	}
+}
+
+func TestClient_SendsSpotifyIDAsQuery(t *testing.T) {
+	var gotIDs string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.EscapedPath()
+		gotIDs = r.URL.Query().Get("ids")
 		_, _ = w.Write([]byte(featuresResponse))
 	}))
 	t.Cleanup(srv.Close)
@@ -71,8 +106,9 @@ func TestClient_EscapesSpotifyID(t *testing.T) {
 	if _, err := c.AudioFeatures(context.Background(), "weird/id space"); err != nil {
 		t.Fatalf("AudioFeatures error: %v", err)
 	}
-	if gotPath != "/v1/track/weird%2Fid%20space/audio-features" {
-		t.Errorf("path = %q, want id path-escaped", gotPath)
+	// The id must arrive intact after query-escaping/decoding.
+	if gotIDs != "weird/id space" {
+		t.Errorf("ids = %q, want %q (query-escaped in transit)", gotIDs, "weird/id space")
 	}
 }
 
@@ -99,8 +135,33 @@ func TestClient_LogsRequest(t *testing.T) {
 	if rec["status"] != float64(http.StatusOK) {
 		t.Errorf("status = %v, want 200", rec["status"])
 	}
+	if rec["found"] != true {
+		t.Errorf("found = %v, want true", rec["found"])
+	}
 	if _, ok := rec["dur"]; !ok {
 		t.Error("dur missing from log record")
+	}
+}
+
+func TestClient_LogsNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(emptyResponse))
+	}))
+	t.Cleanup(srv.Close)
+
+	buf := &bytes.Buffer{}
+	logger := slog.New(slog.NewJSONHandler(buf, nil))
+	c := NewClient(WithBaseURL(srv.URL), WithHTTPClient(srv.Client()), WithLogger(logger))
+	_, _ = c.AudioFeatures(context.Background(), "track-abc")
+
+	var rec map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &rec); err != nil {
+		t.Fatalf("decode log line %q: %v", buf.String(), err)
+	}
+	// A 200 with no features must be visibly distinct from a successful hit,
+	// otherwise the log can't explain why a scan got no audio features.
+	if rec["found"] != false {
+		t.Errorf("found = %v, want false", rec["found"])
 	}
 }
 
