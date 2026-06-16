@@ -10,9 +10,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/aaronpollock/liner-notes-server/internal/httpx"
 )
@@ -43,6 +45,7 @@ type AudioFeatures struct {
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
+	logger     *slog.Logger
 }
 
 // Option configures a Client.
@@ -58,11 +61,18 @@ func WithHTTPClient(h *http.Client) Option {
 	return func(c *Client) { c.httpClient = h }
 }
 
+// WithLogger sets the logger used to record outbound requests. Without it, the
+// client discards request logs.
+func WithLogger(l *slog.Logger) Option {
+	return func(c *Client) { c.logger = l }
+}
+
 // NewClient builds a ReccoBeats client. No credentials are required.
 func NewClient(opts ...Option) *Client {
 	c := &Client{
 		baseURL:    DefaultBaseURL,
 		httpClient: http.DefaultClient,
+		logger:     slog.New(slog.DiscardHandler),
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -80,11 +90,23 @@ func (c *Client) AudioFeatures(ctx context.Context, spotifyID string) (*AudioFea
 	}
 	req.Header.Set("Accept", "application/json")
 
+	start := time.Now()
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		c.logger.Error("reccobeats request",
+			"spotify_id", spotifyID,
+			"dur", time.Since(start).String(),
+			"err", err.Error(),
+		)
 		return nil, fmt.Errorf("reccobeats: request: %w", err)
 	}
 	defer resp.Body.Close()
+
+	c.logger.Info("reccobeats request",
+		"spotify_id", spotifyID,
+		"status", resp.StatusCode,
+		"dur", time.Since(start).String(),
+	)
 
 	if err := httpx.CheckResponse(serviceName, resp); err != nil {
 		return nil, err
