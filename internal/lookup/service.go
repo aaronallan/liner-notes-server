@@ -14,8 +14,9 @@ import (
 	"github.com/aaronpollock/liner-notes-server/internal/spotify"
 )
 
-// ErrInvalidRequest indicates the caller supplied no ISRC to resolve.
-var ErrInvalidRequest = errors.New("lookup: request requires an ISRC")
+// ErrInvalidRequest indicates the caller supplied neither an ISRC nor a usable
+// title+artist pair to resolve the track from.
+var ErrInvalidRequest = errors.New("lookup: request requires an ISRC or title and artist")
 
 // FeaturesStatus reports whether audio features were resolved for a scan.
 type FeaturesStatus string
@@ -96,7 +97,10 @@ func NewService(search Searcher, features FeaturesFetcher, cache IDCache, opts .
 // Lookup runs the pipeline for one request. It only returns an error for invalid
 // input; upstream failures are absorbed into a degraded (but successful) result.
 func (s *Service) Lookup(ctx context.Context, req Request) (Result, error) {
-	if req.ISRC == "" {
+	// A request is resolvable from an ISRC, or — when ShazamKit returned no
+	// ISRC — from a title+artist pair. Reject only when we have neither.
+	hasTitleArtist := strings.TrimSpace(req.Title) != "" && strings.TrimSpace(req.Artist) != ""
+	if req.ISRC == "" && !hasTitleArtist {
 		return Result{}, ErrInvalidRequest
 	}
 
@@ -130,15 +134,19 @@ func (s *Service) Lookup(ctx context.Context, req Request) (Result, error) {
 // cache first, then an ISRC search, then a title/artist fallback. It returns ""
 // when the track cannot be resolved. Resolved metadata enriches result.
 func (s *Service) resolveSpotifyID(ctx context.Context, req Request, result *Result) string {
-	if id, ok := s.cache.Get(req.ISRC); ok {
-		return id
-	}
+	// With no ISRC the cache (keyed on ISRC) and the ISRC search are both
+	// meaningless, so go straight to the title+artist fallback below.
+	if req.ISRC != "" {
+		if id, ok := s.cache.Get(req.ISRC); ok {
+			return id
+		}
 
-	// Primary: resolve by ISRC, which identifies the exact recording.
-	if tracks := s.searchTracks(ctx, func(ctx context.Context) ([]spotify.Track, error) {
-		return s.search.SearchByISRC(ctx, req.ISRC)
-	}); len(tracks) > 0 {
-		return s.acceptTrack(req.ISRC, tracks[0], result)
+		// Primary: resolve by ISRC, which identifies the exact recording.
+		if tracks := s.searchTracks(ctx, func(ctx context.Context) ([]spotify.Track, error) {
+			return s.search.SearchByISRC(ctx, req.ISRC)
+		}); len(tracks) > 0 {
+			return s.acceptTrack(req.ISRC, tracks[0], result)
+		}
 	}
 
 	// Fallback: free-text title + artist from the Shazam match.
@@ -166,7 +174,11 @@ func (s *Service) searchTracks(ctx context.Context, fn func(context.Context) ([]
 // acceptTrack records the ISRC → ID mapping, enriches missing metadata from the
 // resolved track, and returns the track ID.
 func (s *Service) acceptTrack(isrc string, t spotify.Track, result *Result) string {
-	s.cache.Set(isrc, t.ID)
+	// Only cache a real ISRC → ID mapping; an empty key would collide across
+	// unrelated title/artist requests.
+	if isrc != "" {
+		s.cache.Set(isrc, t.ID)
+	}
 	if result.Title == "" {
 		result.Title = t.Name
 	}
