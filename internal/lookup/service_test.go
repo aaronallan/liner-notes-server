@@ -51,16 +51,19 @@ func newTestService(s Searcher, f FeaturesFetcher) *Service {
 		WithRetry(retry.Config{MaxAttempts: 3, BaseDelay: time.Millisecond, MaxDelay: 2 * time.Millisecond}))
 }
 
+// req is a valid request: title+artist are required, ISRC is optional.
+func req(title, artist string) Request { return Request{Title: title, Artist: artist} }
+
 func TestLookup_HappyPath(t *testing.T) {
 	feats := &reccobeats.AudioFeatures{Tempo: 120, Danceability: 0.8}
 	search := &fakeSearcher{
-		byISRC: func(string) ([]spotify.Track, error) {
+		byTitle: func(string, string) ([]spotify.Track, error) {
 			return []spotify.Track{track("track-1", "Song", "Artist")}, nil
 		},
 	}
 	features := &fakeFeatures{fn: func(string) (*reccobeats.AudioFeatures, error) { return feats, nil }}
 
-	res, err := newTestService(search, features).Lookup(context.Background(), Request{ISRC: "ISRC1"})
+	res, err := newTestService(search, features).Lookup(context.Background(), req("Song", "Artist"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -75,52 +78,36 @@ func TestLookup_HappyPath(t *testing.T) {
 	}
 }
 
-func TestLookup_EnrichesMetadataFromTrack(t *testing.T) {
+func TestLookup_UsesISRCSearchFirstWhenPresent(t *testing.T) {
 	search := &fakeSearcher{
 		byISRC: func(string) ([]spotify.Track, error) {
-			return []spotify.Track{track("id", "Such Great Heights", "The Postal Service")}, nil
+			return []spotify.Track{track("isrc-id", "Song", "Artist")}, nil
+		},
+		byTitle: func(string, string) ([]spotify.Track, error) {
+			t.Fatal("title/artist search must not run when the ISRC search hits")
+			return nil, nil
 		},
 	}
 	features := &fakeFeatures{fn: func(string) (*reccobeats.AudioFeatures, error) {
 		return &reccobeats.AudioFeatures{}, nil
 	}}
 
-	// Request supplies no title/artist; they should be filled from the track.
-	res, _ := newTestService(search, features).Lookup(context.Background(), Request{ISRC: "ISRC1"})
-	if res.Title != "Such Great Heights" {
-		t.Errorf("Title = %q, want enriched from track", res.Title)
+	res, err := newTestService(search, features).Lookup(context.Background(),
+		Request{ISRC: "ISRC1", Title: "Song", Artist: "Artist"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if res.Artist != "The Postal Service" {
-		t.Errorf("Artist = %q, want enriched from track", res.Artist)
+	if res.SpotifyID != "isrc-id" {
+		t.Errorf("SpotifyID = %q, want isrc-id", res.SpotifyID)
 	}
-}
-
-func TestLookup_CachesISRCToID(t *testing.T) {
-	search := &fakeSearcher{
-		byISRC: func(string) ([]spotify.Track, error) {
-			return []spotify.Track{track("track-1", "Song", "Artist")}, nil
-		},
-	}
-	features := &fakeFeatures{fn: func(string) (*reccobeats.AudioFeatures, error) {
-		return &reccobeats.AudioFeatures{}, nil
-	}}
-	svc := newTestService(search, features)
-
-	for i := 0; i < 3; i++ {
-		if _, err := svc.Lookup(context.Background(), Request{ISRC: "ISRC1"}); err != nil {
-			t.Fatalf("lookup %d: %v", i, err)
-		}
-	}
-	if search.isrcCalls != 1 {
-		t.Errorf("isrcCalls = %d, want 1 (mapping should be cached)", search.isrcCalls)
+	if search.isrcCalls != 1 || search.titleCalls != 0 {
+		t.Errorf("isrcCalls=%d titleCalls=%d, want 1/0", search.isrcCalls, search.titleCalls)
 	}
 }
 
-func TestLookup_FallsBackToTitleArtist(t *testing.T) {
+func TestLookup_FallsBackToTitleArtistWhenISRCMisses(t *testing.T) {
 	search := &fakeSearcher{
-		byISRC: func(string) ([]spotify.Track, error) {
-			return nil, nil // ISRC yields nothing
-		},
+		byISRC: func(string) ([]spotify.Track, error) { return nil, nil }, // ISRC yields nothing
 		byTitle: func(title, artist string) ([]spotify.Track, error) {
 			if title != "Song" || artist != "Artist" {
 				t.Errorf("fallback called with %q/%q", title, artist)
@@ -140,14 +127,93 @@ func TestLookup_FallsBackToTitleArtist(t *testing.T) {
 	if res.SpotifyID != "fallback-id" {
 		t.Errorf("SpotifyID = %q, want fallback-id", res.SpotifyID)
 	}
+	if search.isrcCalls != 1 || search.titleCalls != 1 {
+		t.Errorf("isrcCalls=%d titleCalls=%d, want 1/1", search.isrcCalls, search.titleCalls)
+	}
+}
+
+func TestLookup_CachesByTitleArtist(t *testing.T) {
+	search := &fakeSearcher{
+		byTitle: func(string, string) ([]spotify.Track, error) {
+			return []spotify.Track{track("track-1", "Song", "Artist")}, nil
+		},
+	}
+	features := &fakeFeatures{fn: func(string) (*reccobeats.AudioFeatures, error) {
+		return &reccobeats.AudioFeatures{}, nil
+	}}
+	svc := newTestService(search, features)
+
+	for i := range 3 {
+		if _, err := svc.Lookup(context.Background(), req("Song", "Artist")); err != nil {
+			t.Fatalf("lookup %d: %v", i, err)
+		}
+	}
 	if search.titleCalls != 1 {
-		t.Errorf("titleCalls = %d, want 1", search.titleCalls)
+		t.Errorf("titleCalls = %d, want 1 (mapping should be cached)", search.titleCalls)
+	}
+}
+
+func TestLookup_CacheKeyCaseAndWhitespaceInsensitive(t *testing.T) {
+	search := &fakeSearcher{
+		byTitle: func(string, string) ([]spotify.Track, error) {
+			return []spotify.Track{track("track-1", "Song", "Artist")}, nil
+		},
+	}
+	features := &fakeFeatures{fn: func(string) (*reccobeats.AudioFeatures, error) {
+		return &reccobeats.AudioFeatures{}, nil
+	}}
+	svc := newTestService(search, features)
+
+	_, _ = svc.Lookup(context.Background(), req("Song", "Artist"))
+	_, _ = svc.Lookup(context.Background(), req("  song ", "ARTIST"))
+
+	if search.titleCalls != 1 {
+		t.Errorf("titleCalls = %d, want 1 (case/whitespace variant should hit cache)", search.titleCalls)
+	}
+}
+
+func TestLookup_VersionQualifiersDoNotCollide(t *testing.T) {
+	search := &fakeSearcher{
+		byTitle: func(title, _ string) ([]spotify.Track, error) {
+			return []spotify.Track{track("id:"+title, title, "Artist")}, nil
+		},
+	}
+	features := &fakeFeatures{fn: func(string) (*reccobeats.AudioFeatures, error) {
+		return &reccobeats.AudioFeatures{}, nil
+	}}
+	svc := newTestService(search, features)
+
+	r1, _ := svc.Lookup(context.Background(), req("Song", "Artist"))
+	r2, _ := svc.Lookup(context.Background(), req("Song (Live)", "Artist"))
+
+	if search.titleCalls != 2 {
+		t.Errorf("titleCalls = %d, want 2 (distinct recordings must not share a cache entry)", search.titleCalls)
+	}
+	if r1.SpotifyID == r2.SpotifyID {
+		t.Errorf("distinct titles resolved to the same id: %q", r1.SpotifyID)
+	}
+}
+
+func TestLookup_RequiresTitleAndArtist(t *testing.T) {
+	svc := newTestService(&fakeSearcher{}, &fakeFeatures{})
+
+	cases := []Request{
+		{},                             // nothing
+		{Title: "Song"},                // missing artist
+		{Artist: "Artist"},             // missing title
+		{ISRC: "ISRC1"},                // ISRC alone is not enough
+		{ISRC: "ISRC1", Title: "Song"}, // ISRC + title, still no artist
+		{Title: "  ", Artist: "  "},    // whitespace only
+	}
+	for _, c := range cases {
+		if _, err := svc.Lookup(context.Background(), c); !errors.Is(err, ErrInvalidRequest) {
+			t.Errorf("Lookup(%+v) error = %v, want ErrInvalidRequest", c, err)
+		}
 	}
 }
 
 func TestLookup_DegradesWhenNoTrackResolved(t *testing.T) {
 	search := &fakeSearcher{
-		byISRC:  func(string) ([]spotify.Track, error) { return nil, nil },
 		byTitle: func(string, string) ([]spotify.Track, error) { return nil, nil },
 	}
 	features := &fakeFeatures{fn: func(string) (*reccobeats.AudioFeatures, error) {
@@ -155,8 +221,7 @@ func TestLookup_DegradesWhenNoTrackResolved(t *testing.T) {
 		return nil, nil
 	}}
 
-	res, err := newTestService(search, features).Lookup(context.Background(),
-		Request{ISRC: "ISRC1", Title: "Song", Artist: "Artist"})
+	res, err := newTestService(search, features).Lookup(context.Background(), req("Song", "Artist"))
 	if err != nil {
 		t.Fatalf("scan must not hard-fail: %v", err)
 	}
@@ -166,7 +231,6 @@ func TestLookup_DegradesWhenNoTrackResolved(t *testing.T) {
 	if res.FeaturesStatus != StatusUnavailable {
 		t.Errorf("FeaturesStatus = %q, want unavailable", res.FeaturesStatus)
 	}
-	// Shazam metadata is still returned.
 	if res.Title != "Song" || res.Artist != "Artist" {
 		t.Errorf("metadata lost: title=%q artist=%q", res.Title, res.Artist)
 	}
@@ -174,7 +238,7 @@ func TestLookup_DegradesWhenNoTrackResolved(t *testing.T) {
 
 func TestLookup_DegradesWhenFeaturesUnavailable(t *testing.T) {
 	search := &fakeSearcher{
-		byISRC: func(string) ([]spotify.Track, error) {
+		byTitle: func(string, string) ([]spotify.Track, error) {
 			return []spotify.Track{track("track-1", "Song", "Artist")}, nil
 		},
 	}
@@ -182,7 +246,7 @@ func TestLookup_DegradesWhenFeaturesUnavailable(t *testing.T) {
 		return nil, &httpx.APIError{Service: "reccobeats", StatusCode: 404}
 	}}
 
-	res, err := newTestService(search, features).Lookup(context.Background(), Request{ISRC: "ISRC1"})
+	res, err := newTestService(search, features).Lookup(context.Background(), req("Song", "Artist"))
 	if err != nil {
 		t.Fatalf("scan must not hard-fail on feature trouble: %v", err)
 	}
@@ -200,7 +264,7 @@ func TestLookup_DegradesWhenFeaturesUnavailable(t *testing.T) {
 func TestLookup_RetriesTransientSearchError(t *testing.T) {
 	attempts := 0
 	search := &fakeSearcher{
-		byISRC: func(string) ([]spotify.Track, error) {
+		byTitle: func(string, string) ([]spotify.Track, error) {
 			attempts++
 			if attempts < 2 {
 				return nil, &httpx.APIError{Service: "spotify", StatusCode: 503}
@@ -212,7 +276,7 @@ func TestLookup_RetriesTransientSearchError(t *testing.T) {
 		return &reccobeats.AudioFeatures{}, nil
 	}}
 
-	res, err := newTestService(search, features).Lookup(context.Background(), Request{ISRC: "ISRC1"})
+	res, err := newTestService(search, features).Lookup(context.Background(), req("Song", "Artist"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -221,112 +285,5 @@ func TestLookup_RetriesTransientSearchError(t *testing.T) {
 	}
 	if attempts != 2 {
 		t.Errorf("search attempts = %d, want 2", attempts)
-	}
-}
-
-func TestLookup_ResolvesByTitleArtistWhenNoISRC(t *testing.T) {
-	search := &fakeSearcher{
-		byISRC: func(string) ([]spotify.Track, error) {
-			t.Fatal("SearchByISRC must not be called when no ISRC is supplied")
-			return nil, nil
-		},
-		byTitle: func(title, artist string) ([]spotify.Track, error) {
-			if title != "Song" || artist != "Artist" {
-				t.Errorf("title search called with %q/%q", title, artist)
-			}
-			return []spotify.Track{track("title-id", "Song", "Artist")}, nil
-		},
-	}
-	features := &fakeFeatures{fn: func(string) (*reccobeats.AudioFeatures, error) {
-		return &reccobeats.AudioFeatures{Tempo: 90}, nil
-	}}
-
-	res, err := newTestService(search, features).Lookup(context.Background(),
-		Request{Title: "Song", Artist: "Artist"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if res.SpotifyID != "title-id" {
-		t.Errorf("SpotifyID = %q, want title-id", res.SpotifyID)
-	}
-	if res.FeaturesStatus != StatusAvailable {
-		t.Errorf("FeaturesStatus = %q, want available", res.FeaturesStatus)
-	}
-	if search.isrcCalls != 0 {
-		t.Errorf("isrcCalls = %d, want 0", search.isrcCalls)
-	}
-	if search.titleCalls != 1 {
-		t.Errorf("titleCalls = %d, want 1", search.titleCalls)
-	}
-}
-
-func TestLookup_NoISRCDoesNotCache(t *testing.T) {
-	search := &fakeSearcher{
-		byISRC: func(string) ([]spotify.Track, error) {
-			t.Fatal("SearchByISRC must not be called when no ISRC is supplied")
-			return nil, nil
-		},
-		byTitle: func(string, string) ([]spotify.Track, error) {
-			return []spotify.Track{track("title-id", "Song", "Artist")}, nil
-		},
-	}
-	features := &fakeFeatures{fn: func(string) (*reccobeats.AudioFeatures, error) {
-		return &reccobeats.AudioFeatures{}, nil
-	}}
-	svc := newTestService(search, features)
-
-	for i := 0; i < 2; i++ {
-		if _, err := svc.Lookup(context.Background(), Request{Title: "Song", Artist: "Artist"}); err != nil {
-			t.Fatalf("lookup %d: %v", i, err)
-		}
-	}
-	// No real ISRC means nothing is cached; each request must search again.
-	if search.titleCalls != 2 {
-		t.Errorf("titleCalls = %d, want 2 (no empty-key cache hit)", search.titleCalls)
-	}
-}
-
-func TestLookup_DegradesWhenNoISRCAndTitleArtistMiss(t *testing.T) {
-	search := &fakeSearcher{
-		byISRC: func(string) ([]spotify.Track, error) {
-			t.Fatal("SearchByISRC must not be called when no ISRC is supplied")
-			return nil, nil
-		},
-		byTitle: func(string, string) ([]spotify.Track, error) { return nil, nil },
-	}
-	features := &fakeFeatures{fn: func(string) (*reccobeats.AudioFeatures, error) {
-		t.Fatal("features should not be fetched when no ID resolved")
-		return nil, nil
-	}}
-
-	res, err := newTestService(search, features).Lookup(context.Background(),
-		Request{Title: "Song", Artist: "Artist"})
-	if err != nil {
-		t.Fatalf("scan must not hard-fail: %v", err)
-	}
-	if res.SpotifyID != "" {
-		t.Errorf("SpotifyID = %q, want empty", res.SpotifyID)
-	}
-	if res.FeaturesStatus != StatusUnavailable {
-		t.Errorf("FeaturesStatus = %q, want unavailable", res.FeaturesStatus)
-	}
-	if res.Title != "Song" || res.Artist != "Artist" {
-		t.Errorf("metadata lost: title=%q artist=%q", res.Title, res.Artist)
-	}
-}
-
-func TestLookup_RejectsNoISRCAndNoTitleArtist(t *testing.T) {
-	svc := newTestService(&fakeSearcher{}, &fakeFeatures{})
-
-	cases := []Request{
-		{},                          // nothing at all
-		{Title: "Song"},             // missing artist
-		{Artist: "Artist"},          // missing title
-		{Title: "  ", Artist: "  "}, // whitespace only
-	}
-	for _, req := range cases {
-		if _, err := svc.Lookup(context.Background(), req); !errors.Is(err, ErrInvalidRequest) {
-			t.Errorf("Lookup(%+v) error = %v, want ErrInvalidRequest", req, err)
-		}
 	}
 }

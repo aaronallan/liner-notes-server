@@ -65,7 +65,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if errors.Is(err, ErrInvalidRequest) {
-			writeError(w, http.StatusBadRequest, "an isrc or title and artist is required")
+			writeError(w, http.StatusBadRequest, "title and artist are required")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "lookup failed")
