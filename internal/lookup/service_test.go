@@ -132,6 +132,25 @@ func TestLookup_FallsBackToTitleArtistWhenISRCMisses(t *testing.T) {
 	}
 }
 
+func TestLookup_ReturnsAlbumArtFromSearch(t *testing.T) {
+	search := &fakeSearcher{
+		byTitle: func(string, string) ([]spotify.Track, error) {
+			return []spotify.Track{{ID: "track-1", Name: "Song", Artists: []string{"Artist"}, AlbumArtURL: "https://i.scdn.co/large"}}, nil
+		},
+	}
+	features := &fakeFeatures{fn: func(string) (*reccobeats.AudioFeatures, error) {
+		return &reccobeats.AudioFeatures{}, nil
+	}}
+
+	res, err := newTestService(search, features).Lookup(context.Background(), req("Song", "Artist"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.AlbumArtURL != "https://i.scdn.co/large" {
+		t.Errorf("AlbumArtURL = %q, want forwarded from the resolved track", res.AlbumArtURL)
+	}
+}
+
 func TestLookup_CachesByTitleArtist(t *testing.T) {
 	search := &fakeSearcher{
 		byTitle: func(string, string) ([]spotify.Track, error) {

@@ -36,6 +36,7 @@ func TestHandler_Success(t *testing.T) {
 			Title:          "Song",
 			Artist:         "Artist",
 			SpotifyID:      "track-1",
+			AlbumArtURL:    "https://i.scdn.co/large",
 			Features:       &reccobeats.AudioFeatures{Tempo: 120, Danceability: 0.8},
 			FeaturesStatus: StatusAvailable,
 		}, nil
@@ -56,6 +57,9 @@ func TestHandler_Success(t *testing.T) {
 	}
 	if resp["spotify_id"] != "track-1" {
 		t.Errorf("spotify_id = %v, want track-1", resp["spotify_id"])
+	}
+	if resp["album_art_url"] != "https://i.scdn.co/large" {
+		t.Errorf("album_art_url = %v, want the forwarded URL", resp["album_art_url"])
 	}
 	if resp["features_status"] != "available" {
 		t.Errorf("features_status = %v, want available", resp["features_status"])

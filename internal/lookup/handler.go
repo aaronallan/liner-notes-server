@@ -40,6 +40,7 @@ type responseBody struct {
 	Title          string                    `json:"title"`
 	Artist         string                    `json:"artist"`
 	SpotifyID      string                    `json:"spotify_id,omitempty"`
+	AlbumArtURL    string                    `json:"album_art_url,omitempty"`
 	Features       *reccobeats.AudioFeatures `json:"features"`
 	FeaturesStatus FeaturesStatus            `json:"features_status"`
 }
@@ -77,6 +78,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Title:          result.Title,
 		Artist:         result.Artist,
 		SpotifyID:      result.SpotifyID,
+		AlbumArtURL:    result.AlbumArtURL,
 		Features:       result.Features,
 		FeaturesStatus: result.FeaturesStatus,
 	})

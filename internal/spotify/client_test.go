@@ -36,6 +36,61 @@ const searchResponseJSON = `{
   }
 }`
 
+func TestClient_ExtractsLargestAlbumArt(t *testing.T) {
+	const withArt = `{
+	  "tracks": {
+	    "items": [
+	      {
+	        "id": "track-abc",
+	        "name": "Song",
+	        "artists": [{"name": "Artist"}],
+	        "external_ids": {"isrc": "X"},
+	        "album": {
+	          "images": [
+	            {"url": "https://i.scdn.co/medium", "width": 300, "height": 300},
+	            {"url": "https://i.scdn.co/large",  "width": 640, "height": 640},
+	            {"url": "https://i.scdn.co/small",  "width": 64,  "height": 64}
+	          ]
+	        }
+	      }
+	    ]
+	  }
+	}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(withArt))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewClient(staticToken("t"), WithBaseURL(srv.URL), WithHTTPClient(srv.Client()))
+	tracks, err := c.SearchByISRC(context.Background(), "X")
+	if err != nil {
+		t.Fatalf("SearchByISRC error: %v", err)
+	}
+	if len(tracks) != 1 {
+		t.Fatalf("got %d tracks, want 1", len(tracks))
+	}
+	if got := tracks[0].AlbumArtURL; got != "https://i.scdn.co/large" {
+		t.Errorf("AlbumArtURL = %q, want the widest image", got)
+	}
+}
+
+func TestClient_NoAlbumArt(t *testing.T) {
+	// searchResponseJSON has no album/images — must not panic, empty art.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(searchResponseJSON))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewClient(staticToken("t"), WithBaseURL(srv.URL), WithHTTPClient(srv.Client()))
+	tracks, err := c.SearchByISRC(context.Background(), "USSUB0500001")
+	if err != nil {
+		t.Fatalf("SearchByISRC error: %v", err)
+	}
+	if tracks[0].AlbumArtURL != "" {
+		t.Errorf("AlbumArtURL = %q, want empty", tracks[0].AlbumArtURL)
+	}
+}
+
 func TestClient_SearchByISRC(t *testing.T) {
 	var gotPath, gotQuery, gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
