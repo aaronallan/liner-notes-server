@@ -55,6 +55,10 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*Store, error) {
 // Close releases the connection pool.
 func (s *Store) Close() { s.pool.Close() }
 
+// Pool exposes the underlying connection pool. It is intended for tests and
+// advanced callers that need queries beyond this package's methods.
+func (s *Store) Pool() *pgxpool.Pool { return s.pool }
+
 // Get implements lookup.IDCache: it returns the cached Spotify ID for a
 // normalized key. A database error is treated as a miss (logged), so resolution
 // degrades to a fresh Spotify search rather than failing.
