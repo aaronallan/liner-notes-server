@@ -42,7 +42,7 @@ services:
     name: liner-notes-api-prod
     runtime: docker
     dockerfilePath: ./Dockerfile
-    branch: main
+    branch: master
     region: oregon
     plan: starter
     healthCheckPath: /healthz
