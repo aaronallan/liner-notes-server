@@ -63,25 +63,29 @@ database:
 TEST_DATABASE_URL="postgres://liner:liner@localhost:5433/liner" go test ./...
 ```
 
-## Deployment (Render)
+## Deployment (Render + Neon)
 
 The repo ships a `render.yaml` Blueprint defining **staging** and **prod** web
-services, each with its own managed Postgres. Secrets are never committed —
-`DATABASE_URL` is injected from the managed database and Spotify credentials are
-`sync: false` (set in the dashboard).
+services (both on Render's free plan). Postgres is hosted on **Neon** (free tier:
+persistent, scales to zero), so it is not part of the Blueprint. No secrets are
+committed — `DATABASE_URL` and the Spotify credentials are `sync: false`, set in
+the Render dashboard.
 
 One-time setup:
 
-1. Create a Render account and connect this GitHub repo.
-2. **New → Blueprint**, select the repo. Render reads `render.yaml` and
-   provisions both web services and both databases.
-3. Create **two Spotify apps** (staging + prod) so quotas are isolated, and set
-   each app's `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` on the matching
-   Render service.
+1. **Neon**: create a project and two databases (or two branches) — one for
+   staging, one for prod. Copy each connection string (includes `sslmode=require`).
+2. **Spotify**: create two apps (staging + prod) so quotas are isolated.
+3. **Render**: create an account, connect this GitHub repo, then **New →
+   Blueprint** and select it. Render reads `render.yaml` and creates both web
+   services.
+4. For each service, set its env vars: `DATABASE_URL` to the matching Neon
+   connection string, and `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` to the
+   matching Spotify app.
 
 Deploy flow: push to `staging` → the staging service deploys (target for
-release/TestFlight builds); push to `main` → prod deploys. Each service runs the
-embedded migrations on boot and is health-checked at `/healthz`.
+release/TestFlight builds); push to `master` → prod deploys. Each service runs
+the embedded migrations on boot and is health-checked at `/healthz`.
 
 ## Reliability
 
