@@ -29,13 +29,48 @@ Secrets are sourced from the environment (never hardcoded). See `.env.example`.
 | `SPOTIFY_CLIENT_ID`     | Spotify app client ID (Client Credentials)    |
 | `SPOTIFY_CLIENT_SECRET` | Spotify app client secret                     |
 | `PORT`                  | HTTP listen port (default `8080`)             |
+| `DATABASE_URL`          | Postgres connection string (optional). When unset, an in-memory cache is used and the mix-match corpus/endpoint are disabled. |
 
 ## Development
 
 ```sh
-go test ./...        # run the test suite
+go test ./...        # run the test suite (store/ingest integration tests skip
+                     # unless TEST_DATABASE_URL points at a Postgres)
 go run ./cmd/server  # start the HTTP server
 ```
+
+### With Postgres (Docker)
+
+```sh
+docker compose up --build   # app on :8080, Postgres on :5433
+```
+
+Migrations run automatically on startup. To run the integration tests against a
+database:
+
+```sh
+TEST_DATABASE_URL="postgres://liner:liner@localhost:5433/liner" go test ./...
+```
+
+## Deployment (Render)
+
+The repo ships a `render.yaml` Blueprint defining **staging** and **prod** web
+services, each with its own managed Postgres. Secrets are never committed —
+`DATABASE_URL` is injected from the managed database and Spotify credentials are
+`sync: false` (set in the dashboard).
+
+One-time setup:
+
+1. Create a Render account and connect this GitHub repo.
+2. **New → Blueprint**, select the repo. Render reads `render.yaml` and
+   provisions both web services and both databases.
+3. Create **two Spotify apps** (staging + prod) so quotas are isolated, and set
+   each app's `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` on the matching
+   Render service.
+
+Deploy flow: push to `staging` → the staging service deploys (target for
+release/TestFlight builds); push to `main` → prod deploys. Each service runs the
+embedded migrations on boot and is health-checked at `/healthz`.
 
 ## Reliability
 

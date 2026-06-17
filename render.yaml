@@ -1,0 +1,57 @@
+# Render Blueprint: staging + prod for liner-notes-server (topology as code).
+#
+# No secrets live in this file: Spotify credentials are `sync: false` (set once
+# per service in the Render dashboard) and DATABASE_URL is injected from the
+# managed database. Plan names/pricing and regions change over time — verify the
+# current values in the Render docs before applying.
+
+databases:
+  - name: liner-staging
+    databaseName: liner
+    user: liner
+    plan: free # NOTE: Render's free Postgres is time-limited; upgrade for data you keep.
+    region: oregon
+  - name: liner-prod
+    databaseName: liner
+    user: liner
+    plan: basic-256mb
+    region: oregon
+
+services:
+  # Staging tracks the `staging` branch — the target for release/TestFlight builds.
+  - type: web
+    name: liner-notes-api-staging
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    branch: staging
+    region: oregon
+    plan: free # free web services cold-start after idle; acceptable for staging.
+    healthCheckPath: /healthz
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: liner-staging
+          property: connectionString
+      - key: SPOTIFY_CLIENT_ID
+        sync: false
+      - key: SPOTIFY_CLIENT_SECRET
+        sync: false
+
+  # Production tracks `main`.
+  - type: web
+    name: liner-notes-api-prod
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    branch: main
+    region: oregon
+    plan: starter
+    healthCheckPath: /healthz
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: liner-prod
+          property: connectionString
+      - key: SPOTIFY_CLIENT_ID
+        sync: false
+      - key: SPOTIFY_CLIENT_SECRET
+        sync: false
