@@ -18,6 +18,7 @@ import (
 	"github.com/aaronpollock/liner-notes-server/internal/config"
 	"github.com/aaronpollock/liner-notes-server/internal/lookup"
 	"github.com/aaronpollock/liner-notes-server/internal/middleware"
+	"github.com/aaronpollock/liner-notes-server/internal/mixmatch"
 	"github.com/aaronpollock/liner-notes-server/internal/reccobeats"
 	"github.com/aaronpollock/liner-notes-server/internal/spotify"
 	"github.com/aaronpollock/liner-notes-server/internal/spotifyauth"
@@ -57,9 +58,12 @@ func run(logger *slog.Logger) error {
 
 	// Use the Postgres store (durable cache + mix-match corpus) when a database
 	// is configured; otherwise fall back to an in-memory cache for local dev.
+	// The mix-match endpoint requires the corpus, so it is only served with a DB.
 	var idCache lookup.IDCache
+	var st *store.Store
 	if cfg.DatabaseURL != "" {
-		st, err := store.Open(context.Background(), cfg.DatabaseURL, store.WithLogger(logger))
+		var err error
+		st, err = store.Open(context.Background(), cfg.DatabaseURL, store.WithLogger(logger))
 		if err != nil {
 			return err
 		}
@@ -78,6 +82,9 @@ func run(logger *slog.Logger) error {
 
 	mux := http.NewServeMux()
 	mux.Handle("/v1/lookup", lookup.NewHandler(svc))
+	if st != nil {
+		mux.Handle("/v1/mix-matches", mixmatch.NewHandler(svc, st))
+	}
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
