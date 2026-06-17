@@ -1,0 +1,21 @@
+# Keep secrets and local cruft out of the build context.
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+
+# Build artifacts / tooling
+/bin/
+*.exe
+*.test
+*.out
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Docs and CI that don't affect the build
+*.md
+.github/
