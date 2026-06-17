@@ -1,8 +1,22 @@
-# Local dev / CI Postgres for the liner-notes-server corpus + cache.
-# Host port 5433 (container 5432) to avoid colliding with a default local Postgres.
-# The app image is added in AAR-33; for now run the app with:
-#   DATABASE_URL=postgres://liner:liner@localhost:5433/liner go run ./cmd/server
+# Local dev / CI stack for liner-notes-server: the app plus its Postgres.
+# Host Postgres on 5433 (container 5432) to avoid colliding with a default local
+# Postgres. Spotify creds come from the shell or a .env file (default to dummy so
+# the stack boots for a healthz smoke without real credentials).
+#   docker compose up --build
 services:
+  app:
+    build: .
+    environment:
+      DATABASE_URL: postgres://liner:liner@postgres:5432/liner
+      SPOTIFY_CLIENT_ID: ${SPOTIFY_CLIENT_ID:-dummy}
+      SPOTIFY_CLIENT_SECRET: ${SPOTIFY_CLIENT_SECRET:-dummy}
+      PORT: "8080"
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   postgres:
     image: postgres:16
     environment:
