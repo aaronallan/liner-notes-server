@@ -2,23 +2,34 @@
 
 Backend service for **Liner Notes**, the vinyl-record identification app.
 
-The mobile client identifies a track via ShazamKit (yielding **title, artist, and
-ISRC**); this stateless HTTP backend takes that ISRC and returns the track's
-musical/audio characteristics.
+The mobile client identifies a track via ShazamKit (yielding **title and
+artist**, and occasionally an ISRC); this stateless HTTP backend resolves that to
+a Spotify track and returns its audio characteristics and album art. It also
+maintains a Postgres corpus of tracks for harmonic **mix-matching**.
 
 ## Pipeline
 
 ```
-ISRC
-  → Spotify Search  (GET /search?type=track&q=isrc:{isrc}, Client Credentials auth)
-  → Spotify track ID
-  → ReccoBeats       (GET /v1/track/{spotifyId}/audio-features — free, no API key)
+title + artist  (optional ISRC)
+  → Spotify Search  (GET /search?type=track, Client Credentials auth)
+  → Spotify track ID  (+ album art)
+  → ReccoBeats       (GET /v1/audio-features?ids={spotifyId} — free, no API key)
   → audio features
 ```
 
-Spotify's own `/audio-features` endpoint was deprecated on 2024-11-27 and returns
-`403` for new apps, so [ReccoBeats](https://reccobeats.com) is used to recover
-audio features from a Spotify track ID.
+Title + artist is the primary key (ShazamKit rarely returns an ISRC); an ISRC,
+when present, is used opportunistically to pin the exact recording. Spotify's own
+`/audio-features` endpoint was deprecated on 2024-11-27 and returns `403` for new
+apps, so [ReccoBeats](https://reccobeats.com) recovers audio features from a
+Spotify track ID.
+
+## Endpoints
+
+| Method & path          | Purpose                                                                                                                  |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `POST /v1/lookup`      | Resolve a scan (title/artist, optional ISRC) to a Spotify ID, audio features, and album art.                          |
+| `POST /v1/mix-matches` | Given a scan, return corpus tracks that mix well: harmonic key (Camelot), ±5% tempo incl. half/double, ranked by loudness closeness. Requires `DATABASE_URL`. |
+| `GET /healthz`         | Liveness probe.                                                                                                       |
 
 ## Configuration
 
