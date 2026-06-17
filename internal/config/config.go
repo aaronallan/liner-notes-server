@@ -13,6 +13,9 @@ type Config struct {
 	SpotifyClientSecret string
 	// Addr is the listen address for the HTTP server, e.g. ":8080".
 	Addr string
+	// DatabaseURL is the Postgres connection string. When empty the server uses
+	// an in-memory cache and no durable corpus.
+	DatabaseURL string
 }
 
 // Load reads configuration using the given lookup function (typically os.Getenv).
@@ -34,5 +37,6 @@ func Load(getenv func(string) string) (Config, error) {
 		port = defaultPort
 	}
 	cfg.Addr = ":" + port
+	cfg.DatabaseURL = getenv("DATABASE_URL")
 	return cfg, nil
 }

@@ -1,0 +1,23 @@
+# Local dev / CI Postgres for the liner-notes-server corpus + cache.
+# Host port 5433 (container 5432) to avoid colliding with a default local Postgres.
+# The app image is added in AAR-33; for now run the app with:
+#   DATABASE_URL=postgres://liner:liner@localhost:5433/liner go run ./cmd/server
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: liner
+      POSTGRES_PASSWORD: liner
+      POSTGRES_DB: liner
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U liner -d liner"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

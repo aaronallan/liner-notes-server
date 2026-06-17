@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"github.com/aaronpollock/liner-notes-server/internal/reccobeats"
 	"github.com/aaronpollock/liner-notes-server/internal/spotify"
 	"github.com/aaronpollock/liner-notes-server/internal/spotifyauth"
+	"github.com/aaronpollock/liner-notes-server/internal/store"
 )
 
 func main() {
@@ -52,7 +54,25 @@ func run(logger *slog.Logger) error {
 		reccobeats.WithHTTPClient(httpClient),
 		reccobeats.WithLogger(logger),
 	)
-	idCache := cache.NewMemory[string, string]()
+
+	// Use the Postgres store (durable cache + mix-match corpus) when a database
+	// is configured; otherwise fall back to an in-memory cache for local dev.
+	var idCache lookup.IDCache
+	if cfg.DatabaseURL != "" {
+		st, err := store.Open(context.Background(), cfg.DatabaseURL, store.WithLogger(logger))
+		if err != nil {
+			return err
+		}
+		defer st.Close()
+		if err := st.Migrate(context.Background()); err != nil {
+			return fmt.Errorf("migrate: %w", err)
+		}
+		logger.Info("using postgres store")
+		idCache = st
+	} else {
+		logger.Info("using in-memory cache (no DATABASE_URL)")
+		idCache = cache.NewMemory[string, string]()
+	}
 
 	svc := lookup.NewService(search, features, idCache)
 

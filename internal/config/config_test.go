@@ -26,6 +26,33 @@ func TestLoad_Valid(t *testing.T) {
 	}
 }
 
+func TestLoad_DatabaseURL(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"SPOTIFY_CLIENT_ID":     "id",
+		"SPOTIFY_CLIENT_SECRET": "secret",
+		"DATABASE_URL":          "postgres://u@localhost/db",
+	}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.DatabaseURL != "postgres://u@localhost/db" {
+		t.Errorf("DatabaseURL = %q, not loaded", cfg.DatabaseURL)
+	}
+}
+
+func TestLoad_DatabaseURLOptional(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"SPOTIFY_CLIENT_ID":     "id",
+		"SPOTIFY_CLIENT_SECRET": "secret",
+	}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.DatabaseURL != "" {
+		t.Errorf("DatabaseURL = %q, want empty when unset", cfg.DatabaseURL)
+	}
+}
+
 func TestLoad_DefaultsPort(t *testing.T) {
 	cfg, err := Load(env(map[string]string{
 		"SPOTIFY_CLIENT_ID":     "id",
