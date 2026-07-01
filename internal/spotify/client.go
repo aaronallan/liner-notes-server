@@ -187,7 +187,7 @@ func (c *Client) searchAlbumID(ctx context.Context, albumName, artistName string
 	if err != nil {
 		return "", fmt.Errorf("spotify: album search request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if err := httpx.CheckResponse(serviceName, resp); err != nil {
 		return "", err
 	}
@@ -219,7 +219,7 @@ func (c *Client) fetchAlbumTracks(ctx context.Context, albumID, fallbackArtist s
 	if err != nil {
 		return nil, fmt.Errorf("spotify: album tracks request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if err := httpx.CheckResponse(serviceName, resp); err != nil {
 		return nil, err
 	}
@@ -277,7 +277,7 @@ func (c *Client) search(ctx context.Context, query string) ([]Track, error) {
 		)
 		return nil, fmt.Errorf("spotify: search request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if err := httpx.CheckResponse(serviceName, resp); err != nil {
 		c.logger.Error("spotify search",

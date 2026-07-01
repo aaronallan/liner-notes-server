@@ -59,11 +59,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.looker.Lookup(r.Context(), Request{
-		ISRC:   body.ISRC,
-		Title:  body.Title,
-		Artist: body.Artist,
-	})
+	result, err := h.looker.Lookup(r.Context(), Request(body))
 	if err != nil {
 		if errors.Is(err, ErrInvalidRequest) {
 			writeError(w, http.StatusBadRequest, "title and artist are required")

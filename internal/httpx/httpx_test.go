@@ -29,7 +29,7 @@ func newResponse(t *testing.T, status int, header http.Header) *http.Response {
 
 func TestCheckResponse_Success(t *testing.T) {
 	resp := newResponse(t, http.StatusOK, nil)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if err := CheckResponse("svc", resp); err != nil {
 		t.Errorf("CheckResponse(200) = %v, want nil", err)
 	}
@@ -37,7 +37,7 @@ func TestCheckResponse_Success(t *testing.T) {
 
 func TestCheckResponse_APIError(t *testing.T) {
 	resp := newResponse(t, http.StatusInternalServerError, nil)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	err := CheckResponse("spotify", resp)
 	if err == nil {
@@ -58,7 +58,7 @@ func TestCheckResponse_APIError(t *testing.T) {
 func TestCheckResponse_RateLimitWithRetryAfterSeconds(t *testing.T) {
 	h := http.Header{"Retry-After": {"7"}}
 	resp := newResponse(t, http.StatusTooManyRequests, h)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	err := CheckResponse("spotify", resp)
 	var rl *RateLimitError
@@ -72,7 +72,7 @@ func TestCheckResponse_RateLimitWithRetryAfterSeconds(t *testing.T) {
 
 func TestCheckResponse_RateLimitWithoutRetryAfter(t *testing.T) {
 	resp := newResponse(t, http.StatusTooManyRequests, nil)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	err := CheckResponse("svc", resp)
 	var rl *RateLimitError

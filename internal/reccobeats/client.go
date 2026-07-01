@@ -117,7 +117,7 @@ func (c *Client) AudioFeatures(ctx context.Context, spotifyID string) (*AudioFea
 		)
 		return nil, fmt.Errorf("reccobeats: request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if err := httpx.CheckResponse(serviceName, resp); err != nil {
 		c.logger.Error("reccobeats request",

@@ -6,6 +6,7 @@ package retry
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/aaronpollock/liner-notes-server/internal/httpx"
@@ -73,7 +74,8 @@ func backoff(cfg Config, attempt int, err error) time.Duration {
 	if delay > cfg.MaxDelay || delay <= 0 {
 		delay = cfg.MaxDelay
 	}
-	if rl, ok := err.(*httpx.RateLimitError); ok && rl.RetryAfter > delay {
+	var rl *httpx.RateLimitError
+	if errors.As(err, &rl) && rl.RetryAfter > delay {
 		delay = rl.RetryAfter
 	}
 	return delay
