@@ -34,6 +34,7 @@ type Track struct {
 	Artists     []string
 	ISRC        string
 	AlbumArtURL string // largest album cover image; empty when none
+	DurationMs  int    // track length in milliseconds; 0 when absent
 }
 
 // Client is a typed wrapper around the Spotify Web API Search endpoint. It
@@ -100,6 +101,7 @@ type searchResponse struct {
 			Artists []struct {
 				Name string `json:"name"`
 			} `json:"artists"`
+			DurationMs  int `json:"duration_ms"`
 			ExternalIDs struct {
 				ISRC string `json:"isrc"`
 			} `json:"external_ids"`
@@ -128,6 +130,121 @@ func largestImageURL(images []image) string {
 		}
 	}
 	return url
+}
+
+// albumSearchResponse models the album search payload.
+type albumSearchResponse struct {
+	Albums struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+	} `json:"albums"`
+}
+
+// albumTracksResponse models the /albums/{id}/tracks payload.
+type albumTracksResponse struct {
+	Items []struct {
+		ID      string `json:"id"`
+		Name    string `json:"name"`
+		Artists []struct {
+			Name string `json:"name"`
+		} `json:"artists"`
+		DurationMs int `json:"duration_ms"`
+	} `json:"items"`
+}
+
+// AlbumTracks returns the tracks on the first Spotify album that matches
+// albumName and artistName. Returns nil with no error when no album is found.
+func (c *Client) AlbumTracks(ctx context.Context, albumName, artistName string) ([]Track, error) {
+	albumID, err := c.searchAlbumID(ctx, albumName, artistName)
+	if err != nil {
+		return nil, err
+	}
+	if albumID == "" {
+		return nil, nil
+	}
+	return c.fetchAlbumTracks(ctx, albumID, artistName)
+}
+
+func (c *Client) searchAlbumID(ctx context.Context, albumName, artistName string) (string, error) {
+	token, err := c.tokens.Token(ctx)
+	if err != nil {
+		return "", fmt.Errorf("spotify: obtain token: %w", err)
+	}
+	params := url.Values{
+		"type":  {"album"},
+		"q":     {fmt.Sprintf("album:%s artist:%s", albumName, artistName)},
+		"limit": {"3"},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/search?"+params.Encode(), nil)
+	if err != nil {
+		return "", fmt.Errorf("spotify: build album search request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("spotify: album search request: %w", err)
+	}
+	defer resp.Body.Close()
+	if err := httpx.CheckResponse(serviceName, resp); err != nil {
+		return "", err
+	}
+	var asr albumSearchResponse
+	if err := json.NewDecoder(resp.Body).Decode(&asr); err != nil {
+		return "", fmt.Errorf("spotify: decode album search response: %w", err)
+	}
+	if len(asr.Albums.Items) == 0 {
+		return "", nil
+	}
+	return asr.Albums.Items[0].ID, nil
+}
+
+func (c *Client) fetchAlbumTracks(ctx context.Context, albumID, fallbackArtist string) ([]Track, error) {
+	token, err := c.tokens.Token(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("spotify: obtain token: %w", err)
+	}
+	params := url.Values{"limit": {"50"}}
+	endpoint := fmt.Sprintf("%s/albums/%s/tracks?%s", c.baseURL, albumID, params.Encode())
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("spotify: build album tracks request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("spotify: album tracks request: %w", err)
+	}
+	defer resp.Body.Close()
+	if err := httpx.CheckResponse(serviceName, resp); err != nil {
+		return nil, err
+	}
+	var atr albumTracksResponse
+	if err := json.NewDecoder(resp.Body).Decode(&atr); err != nil {
+		return nil, fmt.Errorf("spotify: decode album tracks response: %w", err)
+	}
+
+	tracks := make([]Track, 0, len(atr.Items))
+	for _, item := range atr.Items {
+		artists := make([]string, 0, len(item.Artists))
+		for _, a := range item.Artists {
+			artists = append(artists, a.Name)
+		}
+		if len(artists) == 0 {
+			artists = []string{fallbackArtist}
+		}
+		tracks = append(tracks, Track{
+			ID:         item.ID,
+			Name:       item.Name,
+			Artists:    artists,
+			DurationMs: item.DurationMs,
+		})
+	}
+	return tracks, nil
 }
 
 func (c *Client) search(ctx context.Context, query string) ([]Track, error) {
@@ -196,6 +313,7 @@ func (c *Client) search(ctx context.Context, query string) ([]Track, error) {
 			Artists:     artists,
 			ISRC:        it.ExternalIDs.ISRC,
 			AlbumArtURL: largestImageURL(it.Album.Images),
+			DurationMs:  it.DurationMs,
 		})
 	}
 	return tracks, nil

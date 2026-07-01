@@ -12,6 +12,7 @@ import (
 
 	"github.com/aaronpollock/liner-notes-server/internal/camelot"
 	"github.com/aaronpollock/liner-notes-server/internal/lookup"
+	"github.com/aaronpollock/liner-notes-server/internal/reccobeats"
 	"github.com/aaronpollock/liner-notes-server/internal/store"
 )
 
@@ -56,8 +57,12 @@ type matchJSON struct {
 }
 
 type responseBody struct {
-	SpotifyID string      `json:"spotify_id,omitempty"`
-	Matches   []matchJSON `json:"matches"`
+	SpotifyID      string                    `json:"spotify_id,omitempty"`
+	AlbumArtURL    string                    `json:"album_art_url,omitempty"`
+	DurationMs     int                       `json:"duration_ms,omitempty"`
+	Features       *reccobeats.AudioFeatures `json:"features"`
+	FeaturesStatus lookup.FeaturesStatus     `json:"features_status"`
+	Matches        []matchJSON               `json:"matches"`
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -88,7 +93,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Without a resolved track and audio features we can't build a seed; return
 	// an empty (but successful) result so the client degrades gracefully.
 	if res.SpotifyID == "" || res.FeaturesStatus != lookup.StatusAvailable || res.Features == nil {
-		writeJSON(w, http.StatusOK, responseBody{SpotifyID: res.SpotifyID, Matches: []matchJSON{}})
+		writeJSON(w, http.StatusOK, responseBody{
+			SpotifyID:      res.SpotifyID,
+			AlbumArtURL:    res.AlbumArtURL,
+			DurationMs:     res.DurationMs,
+			Features:       res.Features,
+			FeaturesStatus: res.FeaturesStatus,
+			Matches:        []matchJSON{},
+		})
 		return
 	}
 
@@ -103,14 +115,28 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// An unmappable seed key just means no harmonic matches, not a failure.
 		if errors.Is(err, camelot.ErrUnknownKey) {
-			writeJSON(w, http.StatusOK, responseBody{SpotifyID: res.SpotifyID, Matches: []matchJSON{}})
+			writeJSON(w, http.StatusOK, responseBody{
+				SpotifyID:      res.SpotifyID,
+				AlbumArtURL:    res.AlbumArtURL,
+				DurationMs:     res.DurationMs,
+				Features:       res.Features,
+				FeaturesStatus: res.FeaturesStatus,
+				Matches:        []matchJSON{},
+			})
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "match failed")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, responseBody{SpotifyID: res.SpotifyID, Matches: toJSON(matches)})
+	writeJSON(w, http.StatusOK, responseBody{
+		SpotifyID:      res.SpotifyID,
+		AlbumArtURL:    res.AlbumArtURL,
+		DurationMs:     res.DurationMs,
+		Features:       res.Features,
+		FeaturesStatus: res.FeaturesStatus,
+		Matches:        toJSON(matches),
+	})
 }
 
 func limit(requested int) int {

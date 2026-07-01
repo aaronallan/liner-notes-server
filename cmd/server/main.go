@@ -14,8 +14,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aaronpollock/liner-notes-server/internal/albumimport"
 	"github.com/aaronpollock/liner-notes-server/internal/cache"
 	"github.com/aaronpollock/liner-notes-server/internal/config"
+	"github.com/aaronpollock/liner-notes-server/internal/identify"
+	"github.com/aaronpollock/liner-notes-server/internal/ingest"
 	"github.com/aaronpollock/liner-notes-server/internal/lookup"
 	"github.com/aaronpollock/liner-notes-server/internal/middleware"
 	"github.com/aaronpollock/liner-notes-server/internal/mixmatch"
@@ -84,6 +87,13 @@ func run(logger *slog.Logger) error {
 	mux.Handle("/v1/lookup", lookup.NewHandler(svc))
 	if st != nil {
 		mux.Handle("/v1/mix-matches", mixmatch.NewHandler(svc, st))
+		ing := ingest.New(svc, st, ingest.WithLogger(logger))
+		mux.Handle("/v1/album/import", albumimport.NewHandler(search, ing, albumimport.WithLogger(logger)))
+		logger.Info("album import endpoint enabled")
+	}
+	if cfg.AnthropicAPIKey != "" {
+		mux.Handle("/v1/identify", identify.NewHandler(identify.NewClaudeIdentifier(cfg.AnthropicAPIKey, logger)))
+		logger.Info("identify endpoint enabled")
 	}
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)

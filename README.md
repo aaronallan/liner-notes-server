@@ -44,20 +44,48 @@ Secrets are sourced from the environment (never hardcoded). See `.env.example`.
 
 ## Development
 
+### Setup
+
+1. Copy the example env file and fill in your Spotify credentials:
+
+   ```sh
+   cp .env.example .env
+   # edit .env: set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET
+   ```
+
+2. Start Postgres:
+
+   ```sh
+   docker compose up -d postgres
+   ```
+
+3. Allow direnv to load the env automatically:
+
+   ```sh
+   direnv allow
+   ```
+
+   After this, `.env` is loaded whenever you `cd` into the project (requires
+   [direnv](https://direnv.net) — install with `brew install direnv` and add
+   `eval "$(direnv hook zsh)"` to `~/.zshrc`).
+
+4. Start the server:
+
+   ```sh
+   go run ./cmd/server
+   ```
+
+   You should see `"using postgres store"` in the logs. Without `DATABASE_URL`
+   the server falls back to an in-memory cache and the `/v1/mix-matches` endpoint
+   is not registered.
+
+### Tests
+
 ```sh
-go test ./...        # run the test suite (store/ingest integration tests skip
-                     # unless TEST_DATABASE_URL points at a Postgres)
-go run ./cmd/server  # start the HTTP server
+go test ./...   # unit tests; store/ingest integration tests skip without a DB
 ```
 
-### With Postgres (Docker)
-
-```sh
-docker compose up --build   # app on :8080, Postgres on :5433
-```
-
-Migrations run automatically on startup. To run the integration tests against a
-database:
+To run integration tests against the local database:
 
 ```sh
 TEST_DATABASE_URL="postgres://liner:liner@localhost:5433/liner" go test ./...
@@ -86,6 +114,34 @@ One-time setup:
 Deploy flow: push to `staging` → the staging service deploys (target for
 release/TestFlight builds); push to `master` → prod deploys. Each service runs
 the embedded migrations on boot and is health-checked at `/healthz`.
+
+## Seeding the corpus
+
+`cmd/seed` populates the mix-match corpus with a curated track list. It runs the
+full ingest pipeline (Spotify lookup → ReccoBeats features → Postgres upsert) and
+is idempotent — safe to re-run.
+
+**Local** (requires docker-compose running):
+
+```sh
+DATABASE_URL=postgres://liner:liner@localhost:5433/liner \
+SPOTIFY_CLIENT_ID=... \
+SPOTIFY_CLIENT_SECRET=... \
+go run ./cmd/seed
+```
+
+**Staging** (Neon connection string from the Render dashboard or Neon console):
+
+```sh
+DATABASE_URL=<neon-staging-connection-string> \
+SPOTIFY_CLIENT_ID=... \
+SPOTIFY_CLIENT_SECRET=... \
+go run ./cmd/seed
+```
+
+To add tracks, append entries to the `seeds` slice in `cmd/seed/main.go` and
+re-run. Title and artist must match the record-label source (not Spotify-enriched
+values); an ISRC is optional but improves lookup accuracy.
 
 ## Reliability
 

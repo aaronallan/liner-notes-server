@@ -74,6 +74,55 @@ func TestClient_ExtractsLargestAlbumArt(t *testing.T) {
 	}
 }
 
+func TestClient_ExtractsDuration(t *testing.T) {
+	const withDuration = `{
+	  "tracks": {
+	    "items": [
+	      {
+	        "id": "track-abc",
+	        "name": "Song",
+	        "artists": [{"name": "Artist"}],
+	        "external_ids": {"isrc": "X"},
+	        "duration_ms": 215000
+	      }
+	    ]
+	  }
+	}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(withDuration))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewClient(staticToken("t"), WithBaseURL(srv.URL), WithHTTPClient(srv.Client()))
+	tracks, err := c.SearchByISRC(context.Background(), "X")
+	if err != nil {
+		t.Fatalf("SearchByISRC error: %v", err)
+	}
+	if len(tracks) != 1 {
+		t.Fatalf("got %d tracks, want 1", len(tracks))
+	}
+	if got := tracks[0].DurationMs; got != 215000 {
+		t.Errorf("DurationMs = %d, want 215000", got)
+	}
+}
+
+func TestClient_NoDuration(t *testing.T) {
+	// searchResponseJSON has no duration_ms — must default to 0, not panic.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(searchResponseJSON))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewClient(staticToken("t"), WithBaseURL(srv.URL), WithHTTPClient(srv.Client()))
+	tracks, err := c.SearchByISRC(context.Background(), "USSUB0500001")
+	if err != nil {
+		t.Fatalf("SearchByISRC error: %v", err)
+	}
+	if tracks[0].DurationMs != 0 {
+		t.Errorf("DurationMs = %d, want 0", tracks[0].DurationMs)
+	}
+}
+
 func TestClient_NoAlbumArt(t *testing.T) {
 	// searchResponseJSON has no album/images — must not panic, empty art.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -268,6 +317,130 @@ func decodeLog(t *testing.T, buf *bytes.Buffer) map[string]any {
 		t.Fatalf("decode log line %q: %v", buf.String(), err)
 	}
 	return rec
+}
+
+// — AlbumTracks —
+
+const albumSearchJSON = `{
+  "albums": {
+    "items": [{"id": "album-123", "name": "Moon Safari", "artists": [{"name": "Air"}]}]
+  }
+}`
+
+const albumTracksJSON = `{
+  "items": [
+    {"id": "track-1", "name": "La femme d'argent", "artists": [{"name": "Air"}], "track_number": 1, "duration_ms": 429000},
+    {"id": "track-2", "name": "Sexy Boy",           "artists": [{"name": "Air"}], "track_number": 2, "duration_ms": 300000}
+  ]
+}`
+
+func albumTestServer(t *testing.T, albumResp, tracksResp string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/search" {
+			if got := r.URL.Query().Get("type"); got != "album" {
+				t.Errorf("AlbumTracks search: type = %q, want album", got)
+			}
+			_, _ = w.Write([]byte(albumResp))
+		} else {
+			_, _ = w.Write([]byte(tracksResp))
+		}
+	}))
+}
+
+func TestClient_AlbumTracks_ReturnsTracks(t *testing.T) {
+	srv := albumTestServer(t, albumSearchJSON, albumTracksJSON)
+	t.Cleanup(srv.Close)
+
+	c := NewClient(staticToken("t"), WithBaseURL(srv.URL), WithHTTPClient(srv.Client()))
+	tracks, err := c.AlbumTracks(context.Background(), "Moon Safari", "Air")
+	if err != nil {
+		t.Fatalf("AlbumTracks error: %v", err)
+	}
+	if len(tracks) != 2 {
+		t.Fatalf("got %d tracks, want 2", len(tracks))
+	}
+	if tracks[0].Name != "La femme d'argent" {
+		t.Errorf("tracks[0].Name = %q", tracks[0].Name)
+	}
+	if tracks[0].ID != "track-1" {
+		t.Errorf("tracks[0].ID = %q", tracks[0].ID)
+	}
+	if len(tracks[0].Artists) != 1 || tracks[0].Artists[0] != "Air" {
+		t.Errorf("tracks[0].Artists = %v", tracks[0].Artists)
+	}
+	if tracks[0].DurationMs != 429000 {
+		t.Errorf("tracks[0].DurationMs = %d", tracks[0].DurationMs)
+	}
+}
+
+func TestClient_AlbumTracks_SearchQueryIncludesAlbumAndArtist(t *testing.T) {
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/search" {
+			gotQuery = r.URL.Query().Get("q")
+			_, _ = w.Write([]byte(albumSearchJSON))
+		} else {
+			_, _ = w.Write([]byte(albumTracksJSON))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewClient(staticToken("t"), WithBaseURL(srv.URL), WithHTTPClient(srv.Client()))
+	if _, err := c.AlbumTracks(context.Background(), "Moon Safari", "Air"); err != nil {
+		t.Fatalf("AlbumTracks error: %v", err)
+	}
+	if gotQuery != "album:Moon Safari artist:Air" {
+		t.Errorf("q = %q, want album:Moon Safari artist:Air", gotQuery)
+	}
+}
+
+func TestClient_AlbumTracks_NoAlbumFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"albums": {"items": []}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewClient(staticToken("t"), WithBaseURL(srv.URL), WithHTTPClient(srv.Client()))
+	tracks, err := c.AlbumTracks(context.Background(), "Nonexistent", "Nobody")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(tracks) != 0 {
+		t.Errorf("got %d tracks, want 0", len(tracks))
+	}
+}
+
+func TestClient_AlbumTracks_SearchError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "boom", http.StatusBadGateway)
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewClient(staticToken("t"), WithBaseURL(srv.URL), WithHTTPClient(srv.Client()))
+	if _, err := c.AlbumTracks(context.Background(), "Album", "Artist"); err == nil {
+		t.Fatal("expected error when album search fails")
+	}
+}
+
+func TestClient_AlbumTracks_FallsBackToAlbumArtistWhenTrackHasNone(t *testing.T) {
+	const noArtistTracks = `{"items": [{"id": "t1", "name": "Intro", "artists": [], "track_number": 1, "duration_ms": 60000}]}`
+	srv := albumTestServer(t, albumSearchJSON, noArtistTracks)
+	t.Cleanup(srv.Close)
+
+	c := NewClient(staticToken("t"), WithBaseURL(srv.URL), WithHTTPClient(srv.Client()))
+	tracks, err := c.AlbumTracks(context.Background(), "Moon Safari", "Air")
+	if err != nil {
+		t.Fatalf("AlbumTracks error: %v", err)
+	}
+	if len(tracks) != 1 {
+		t.Fatalf("got %d tracks, want 1", len(tracks))
+	}
+	if len(tracks[0].Artists) != 1 || tracks[0].Artists[0] != "Air" {
+		t.Errorf("expected fallback artist Air, got %v", tracks[0].Artists)
+	}
 }
 
 func TestClient_PropagatesTokenError(t *testing.T) {

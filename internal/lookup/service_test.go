@@ -151,6 +151,25 @@ func TestLookup_ReturnsAlbumArtFromSearch(t *testing.T) {
 	}
 }
 
+func TestLookup_ReturnsDurationFromSearch(t *testing.T) {
+	search := &fakeSearcher{
+		byTitle: func(string, string) ([]spotify.Track, error) {
+			return []spotify.Track{{ID: "track-1", Name: "Song", Artists: []string{"Artist"}, DurationMs: 215000}}, nil
+		},
+	}
+	features := &fakeFeatures{fn: func(string) (*reccobeats.AudioFeatures, error) {
+		return &reccobeats.AudioFeatures{}, nil
+	}}
+
+	res, err := newTestService(search, features).Lookup(context.Background(), req("Song", "Artist"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.DurationMs != 215000 {
+		t.Errorf("DurationMs = %d, want forwarded from the resolved track", res.DurationMs)
+	}
+}
+
 func TestLookup_CachesByTitleArtist(t *testing.T) {
 	search := &fakeSearcher{
 		byTitle: func(string, string) ([]spotify.Track, error) {

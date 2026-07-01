@@ -16,6 +16,9 @@ type Config struct {
 	// DatabaseURL is the Postgres connection string. When empty the server uses
 	// an in-memory cache and no durable corpus.
 	DatabaseURL string
+	// AnthropicAPIKey enables the /v1/identify endpoint. When empty the
+	// endpoint is not registered.
+	AnthropicAPIKey string
 }
 
 // Load reads configuration using the given lookup function (typically os.Getenv).
@@ -38,5 +41,6 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 	cfg.Addr = ":" + port
 	cfg.DatabaseURL = getenv("DATABASE_URL")
+	cfg.AnthropicAPIKey = getenv("ANTHROPIC_API_KEY")
 	return cfg, nil
 }

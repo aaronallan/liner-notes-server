@@ -40,6 +40,8 @@ func do(t *testing.T, h http.Handler, method, body string) *httptest.ResponseRec
 func availableSeed() lookup.Result {
 	return lookup.Result{
 		SpotifyID:      "seed-id",
+		AlbumArtURL:    "https://example.com/art.jpg",
+		DurationMs:     215000,
 		Features:       &reccobeats.AudioFeatures{Tempo: 120, Key: 9, Mode: 0, Loudness: -5},
 		FeaturesStatus: lookup.StatusAvailable,
 	}
@@ -62,10 +64,30 @@ func TestHandler_Success(t *testing.T) {
 	}
 
 	var resp struct {
-		Matches []map[string]any `json:"matches"`
+		SpotifyID      string                    `json:"spotify_id"`
+		AlbumArtURL    string                    `json:"album_art_url"`
+		DurationMs     int                       `json:"duration_ms"`
+		Features       *reccobeats.AudioFeatures `json:"features"`
+		FeaturesStatus lookup.FeaturesStatus     `json:"features_status"`
+		Matches        []map[string]any          `json:"matches"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
+	}
+	if resp.SpotifyID != "seed-id" {
+		t.Errorf("spotify_id = %q, want seed-id", resp.SpotifyID)
+	}
+	if resp.AlbumArtURL != "https://example.com/art.jpg" {
+		t.Errorf("album_art_url = %q, want https://example.com/art.jpg", resp.AlbumArtURL)
+	}
+	if resp.DurationMs != 215000 {
+		t.Errorf("duration_ms = %d, want 215000", resp.DurationMs)
+	}
+	if resp.Features == nil || resp.Features.Tempo != 120 {
+		t.Errorf("features = %v, want tempo 120", resp.Features)
+	}
+	if resp.FeaturesStatus != lookup.StatusAvailable {
+		t.Errorf("features_status = %q, want available", resp.FeaturesStatus)
 	}
 	if len(resp.Matches) != 1 || resp.Matches[0]["spotify_id"] != "m1" {
 		t.Errorf("matches = %v, want one m1", resp.Matches)

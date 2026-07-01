@@ -3,6 +3,7 @@
 *.exe
 *.test
 *.out
+/seed
 
 # Env / secrets — never commit
 .env
@@ -18,3 +19,8 @@ go.work.sum
 .DS_Store
 .idea/
 .vscode/
+
+# Claude Code local settings / skills
+.claude/settings.local.json
+.claude/skills/
+skills-lock.json
